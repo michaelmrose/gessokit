@@ -15,7 +15,7 @@
             [malli.core :as malc]
             [malli.registry :as malr]
             [nrepl.cmdline :as nrepl-cmd]
-            [gessotest.form-flow-demo :as form-flow-demo]
+            [gessotest.form-flow-demo.core :as form-flow-demo]
             )
   (:gen-class))
 
