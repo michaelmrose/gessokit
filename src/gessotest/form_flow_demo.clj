@@ -489,7 +489,7 @@
     :control (g/input
               {:type "text"
                :name "username"
-               :autocomplete "username"
+               :autocomplete "new-password"
                :value (:username values)})
     :description "Try admin, support, root, michael, or demo to see a server-side error."
     :error (:username errors)}))
@@ -598,7 +598,8 @@
    :swap "outerHTML"
    :validate-url validate-path
    :class "content-stack-theme"
-   :attrs {:novalidate true}})
+   :attrs {:novalidate true
+           :autocomplete "off"}})
 
 (defn account-form
   ([ctx]
