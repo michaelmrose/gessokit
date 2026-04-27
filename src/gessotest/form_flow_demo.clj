@@ -4,25 +4,9 @@
    [gesso.components.background.patterns :as bg]
    [gesso.components.bars.core :as bars]
    [gesso.core :as g]
+   [gesso.util :as util]
    [gessotest.middleware :as mid]
-   [gessotest.ui :as ui]
-   [rum.core :as rum]))
-
-;; -----------------------------------------------------------------------------
-;; Responses
-;; -----------------------------------------------------------------------------
-
-(defn- html-response
-  [body]
-  {:status 200
-   :headers {"content-type" "text/html; charset=utf-8"}
-   :body (rum/render-static-markup body)})
-
-(defn- no-content
-  []
-  {:status 204
-   :headers {}
-   :body ""})
+   [gessotest.ui :as ui]))
 
 ;; -----------------------------------------------------------------------------
 ;; Route paths
@@ -50,50 +34,6 @@
   (str base-path "/preferences/validate"))
 
 ;; -----------------------------------------------------------------------------
-;; Small request/value helpers
-;; -----------------------------------------------------------------------------
-
-(defn- param
-  [params k]
-  (or (get params k)
-      (get params (name k))))
-
-(defn- present?
-  [x]
-  (and (some? x)
-       (not (str/blank? (str x)))))
-
-(defn- trim-value
-  [x]
-  (when (some? x)
-    (str/trim (str x))))
-
-(defn- parse-int*
-  [x]
-  (when (present? x)
-    (try
-      (Integer/parseInt (str x))
-      (catch Exception _
-        x))))
-
-(defn- maybe-value
-  [attrs v]
-  (if (some? v)
-    (assoc attrs :value v)
-    attrs))
-
-(defn- checked?
-  [value expected]
-  (= (str value) (str expected)))
-
-(defn- option
-  [current value label]
-  [:option (cond-> {:value value}
-             (= (str current) (str value))
-             (assoc :selected true))
-   label])
-
-;; -----------------------------------------------------------------------------
 ;; Demo data and validation helpers
 ;; -----------------------------------------------------------------------------
 
@@ -113,29 +53,42 @@
   #{"bounce@example.com"
     "invalid-alert@example.com"})
 
+(defn- username-starts-with-number?
+  [s]
+  (boolean
+   (and (util/present-value? s)
+        (re-matches #"^[0-9].*" s))))
+
+(defn- valid-username-chars?
+  [s]
+  (boolean
+   (and (util/present-value? s)
+        (re-matches #"^[a-z0-9_-]+$" s))))
+
 (defn- valid-username-shape?
   [s]
   (boolean
-   (and (present? s)
+   (and (util/present-value? s)
         (<= 3 (count s) 24)
-        (re-matches #"^[a-z0-9_-]+$" s))))
+        (valid-username-chars? s)
+        (not (username-starts-with-number? s)))))
 
 (defn- valid-email-shape?
   [s]
   (boolean
-   (and (present? s)
+   (and (util/present-value? s)
         (<= 5 (count s) 120)
         (re-matches #".+@.+" s))))
 
 (defn- valid-phone-shape?
   [s]
-  (or (not (present? s))
+  (or (not (util/present-value? s))
       (boolean (re-matches #"^[0-9+(). -]{7,32}$" s))))
 
 (defn- date-like?
   [s]
   (boolean
-   (and (present? s)
+   (and (util/present-value? s)
         (re-matches #"\d{4}-\d{2}-\d{2}" s))))
 
 ;; -----------------------------------------------------------------------------
@@ -144,28 +97,28 @@
 
 (defn- account-values
   [params]
-  {:username    (trim-value (param params :username))
-   :email       (trim-value (param params :email))
-   :password    (param params :password)
-   :displayName (trim-value (param params :displayName))
-   :source      (param params :source)
-   :newsletter  (param params :newsletter)})
+  {:username    (util/trim-value (util/request-param params :username))
+   :email       (util/trim-value (util/request-param params :email))
+   :password    (util/request-param params :password)
+   :displayName (util/trim-value (util/request-param params :displayName))
+   :source      (util/request-param params :source)
+   :newsletter  (util/request-param params :newsletter)})
 
 (defn- store-values
   [params]
-  {:storeName     (trim-value (param params :storeName))
-   :storeType     (param params :storeType)
-   :employeeCount (parse-int* (param params :employeeCount))
-   :openingDate   (param params :openingDate)
-   :timezone      (param params :timezone)})
+  {:storeName     (util/trim-value (util/request-param params :storeName))
+   :storeType     (util/request-param params :storeType)
+   :employeeCount (util/parse-int-value (util/request-param params :employeeCount))
+   :openingDate   (util/request-param params :openingDate)
+   :timezone      (util/request-param params :timezone)})
 
 (defn- preferences-values
   [params]
-  {:preferredContact (or (param params :preferredContact) "email")
-   :phone            (trim-value (param params :phone))
-   :alertEmail       (trim-value (param params :alertEmail))
-   :sendAlerts       (param params :sendAlerts)
-   :notes            (param params :notes)})
+  {:preferredContact (or (util/request-param params :preferredContact) "email")
+   :phone            (util/trim-value (util/request-param params :phone))
+   :alertEmail       (util/trim-value (util/request-param params :alertEmail))
+   :sendAlerts       (util/request-param params :sendAlerts)
+   :notes            (util/request-param params :notes)})
 
 ;; -----------------------------------------------------------------------------
 ;; Server-side demo errors
@@ -173,20 +126,24 @@
 
 (defn- server-account-errors
   [{:keys [username email]}]
-  (cond-> {}
-    (and (valid-username-shape? username)
-         (contains? taken-usernames (str/lower-case username)))
-    (assoc :username "That username is already taken.")
+  (merge
+   (when (username-starts-with-number? username)
+     {:username "Username cannot start with a number."})
 
-    (and (valid-email-shape? email)
-         (contains? taken-emails (str/lower-case email)))
-    (assoc :email "That email is already in use.")))
+   (cond-> {}
+     (and (valid-username-shape? username)
+          (contains? taken-usernames (str/lower-case username)))
+     (assoc :username "That username is already taken.")
+
+     (and (valid-email-shape? email)
+          (contains? taken-emails (str/lower-case email)))
+     (assoc :email "That email is already in use."))))
 
 (defn- submit-account-errors
   [{:keys [username email password displayName] :as values}]
   (merge
    (cond
-     (not (present? username))
+     (not (util/present-value? username))
      {:username "Username is required."}
 
      (< (count username) 3)
@@ -195,14 +152,17 @@
      (> (count username) 24)
      {:username "Username must be at most 24 characters."}
 
-     (not (valid-username-shape? username))
+     (username-starts-with-number? username)
+     {:username "Username cannot start with a number."}
+
+     (not (valid-username-chars? username))
      {:username "Use lowercase letters, numbers, underscores, or hyphens."}
 
      :else
      {})
 
    (cond
-     (not (present? email))
+     (not (util/present-value? email))
      {:email "Email is required."}
 
      (not (valid-email-shape? email))
@@ -212,7 +172,7 @@
      {})
 
    (cond
-     (not (present? password))
+     (not (util/present-value? password))
      {:password "Password is required."}
 
      (< (count (str password)) 8)
@@ -221,7 +181,7 @@
      :else
      {})
 
-   (when (and (present? displayName)
+   (when (and (util/present-value? displayName)
               (> (count displayName) 80))
      {:displayName "Display name must be at most 80 characters."})
 
@@ -230,7 +190,7 @@
 (defn- server-store-errors
   [{:keys [storeName]}]
   (cond-> {}
-    (and (present? storeName)
+    (and (util/present-value? storeName)
          (contains? reserved-store-names (str/lower-case storeName)))
     (assoc :storeName "That store name is reserved for this demo.")))
 
@@ -238,7 +198,7 @@
   [{:keys [storeName storeType employeeCount openingDate timezone] :as values}]
   (merge
    (cond
-     (not (present? storeName))
+     (not (util/present-value? storeName))
      {:storeName "Store name is required."}
 
      (< (count storeName) 2)
@@ -247,7 +207,7 @@
      :else
      {})
 
-   (when-not (present? storeType)
+   (when-not (util/present-value? storeType)
      {:storeType "Choose a store type."})
 
    (cond
@@ -266,7 +226,7 @@
    (when-not (date-like? openingDate)
      {:openingDate "Choose an opening date."})
 
-   (when-not (present? timezone)
+   (when-not (util/present-value? timezone)
      {:timezone "Choose a timezone."})
 
    (server-store-errors values)))
@@ -282,17 +242,17 @@
   [{:keys [preferredContact phone alertEmail notes] :as values}]
   (merge
    (when (and (= preferredContact "phone")
-              (not (present? phone)))
+              (not (util/present-value? phone)))
      {:phone "Enter a phone number or choose another contact method."})
 
    (when-not (valid-phone-shape? phone)
      {:phone "Use digits, spaces, dashes, parentheses, or +."})
 
-   (when (and (present? alertEmail)
+   (when (and (util/present-value? alertEmail)
               (not (valid-email-shape? alertEmail)))
      {:alertEmail "Enter an email address."})
 
-   (when (and (present? notes)
+   (when (and (util/present-value? notes)
               (> (count (str notes)) 240))
      {:notes "Notes must be 240 characters or fewer."})
 
@@ -308,10 +268,10 @@
     [:and
      [:string {:min 3
                :max 24
-               :gesso.html/pattern "^[a-z_\\-]+[0-9]*$"
+               :gesso.html/pattern "^[a-z0-9_\\-]+$"
                :gesso.error/min "Username must be at least 3 characters."
                :gesso.error/max "Username must be at most 24 characters."
-               :gesso.error/pattern "Use lowercase letters, numbers, underscores, or hyphens. Cant start with a number"
+               :gesso.error/pattern "Use lowercase letters, numbers, underscores, or hyphens."
                :gesso.error/required "Username is required."}]
      [:re #"^[a-z0-9_-]+$"]]]
 
@@ -371,7 +331,7 @@
     [:maybe
      [:and
       [:string {:max 32
-                :gesso.html/pattern "^[0-9+(). -]{7,32}$"
+                :gesso.html/pattern "^[0-9+(). \\-]{7,32}$"
                 :gesso.error/pattern "Use digits, spaces, dashes, parentheses, or +."
                 :gesso.error/max "Phone number is too long."}]
       [:re #"^[0-9+(). -]{7,32}$"]]]]
@@ -390,91 +350,18 @@
                       :gesso.error/max "Notes must be 240 characters or fewer."}]]]])
 
 ;; -----------------------------------------------------------------------------
-;; OOB server error rendering
+;; Server error response
 ;; -----------------------------------------------------------------------------
-
-(defn- js-string
-  [s]
-  (pr-str (str s)))
-
-(defn- reveal-error-script
-  [field-id err-id]
-  (str
-   "(function(){"
-   "var err=document.getElementById(" (js-string err-id) ");"
-   "if(err){"
-   "err.classList.remove('hidden');"
-   "err.dataset.serverError='true';"
-   "}"
-   "var field=document.getElementById(" (js-string field-id) ");"
-   "if(field){field.setAttribute('aria-invalid','true');}"
-   "})();"))
-
-(defn- field-error-oob
-  [field-path message]
-  (let [field-id (g/path->field-id field-path)
-        err-id   (g/path->err-id field-path)]
-    [:div {:id err-id
-           :hx-swap-oob "innerHTML"}
-     [:span {:data-validation-error-message true
-             :style {:color "var(--destructive)"}}
-      message]
-     [:script {:dangerouslySetInnerHTML
-               {:__html (reveal-error-script field-id err-id)}}]]))
-
-(defn- errors-fragment
-  [errors]
-  (into [:<>]
-        (map (fn [[field-path message]]
-               (field-error-oob field-path message)))
-        errors))
 
 (defn- errors-response
   [errors]
   (if (seq errors)
-    (html-response (errors-fragment errors))
-    (no-content)))
+    (g/html-response (g/render-oob-error-map errors))
+    (g/no-content)))
 
 ;; -----------------------------------------------------------------------------
-;; Controls and layout helpers
+;; Layout helpers
 ;; -----------------------------------------------------------------------------
-
-(defn- control-class
-  [kind]
-  (str kind
-       " control-theme w-full rounded-lg border-theme bg-background text-foreground "
-       "font-body text-base-theme leading-body px-3 py-2 shadow-sm "
-       "placeholder:text-muted-foreground "
-       "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1 "
-       "focus:ring-offset-background "
-       "disabled:cursor-not-allowed disabled:opacity-50"))
-
-(defn- input-control
-  [attrs]
-  [:input
-   (merge
-    {:class (control-class "input")}
-    attrs)])
-
-(defn- textarea-control
-  [attrs value]
-  (into
-   [:textarea
-    (merge
-     {:class (str (control-class "textarea")
-                  " min-h-28 resize-y")}
-     attrs)]
-   (when (some? value)
-     [value])))
-
-(defn- select-control
-  [attrs & children]
-  (into
-   [:select
-    (merge
-     {:class (control-class "select")}
-     attrs)]
-   children))
 
 (defn- section-card
   [& children]
@@ -599,12 +486,11 @@
    {:label-text "Username"
     :for :username
     :schema account-schema
-    :control (input-control
-              (maybe-value
-               {:type "text"
-                :name "username"
-                :autocomplete "username"}
-               (:username values)))
+    :control (g/input
+              {:type "text"
+               :name "username"
+               :autocomplete "username"
+               :value (:username values)})
     :description "Try admin, support, root, michael, or demo to see a server-side error."
     :error (:username errors)}))
 
@@ -614,12 +500,11 @@
    {:label-text "Email"
     :for :email
     :schema account-schema
-    :control (input-control
-              (maybe-value
-               {:type "email"
-                :name "email"
-                :autocomplete "email"}
-               (:email values)))
+    :control (g/input
+              {:type "email"
+               :name "email"
+               :autocomplete "email"
+               :value (:email values)})
     :description "Try taken@example.com or used@example.com to see a server-side error."
     :error (:email errors)}))
 
@@ -629,7 +514,7 @@
    {:label-text "Password"
     :for :password
     :schema account-schema
-    :control (input-control
+    :control (g/input
               {:type "password"
                :name "password"
                :autocomplete "new-password"})
@@ -642,12 +527,11 @@
    {:label-text "Display name"
     :for :displayName
     :schema account-schema
-    :control (input-control
-              (maybe-value
-               {:type "text"
-                :name "displayName"
-                :autocomplete "name"}
-               (:displayName values)))
+    :control (g/input
+              {:type "text"
+               :name "displayName"
+               :autocomplete "name"
+               :value (:displayName values)})
     :description "Optional."
     :error (:displayName errors)}))
 
@@ -657,13 +541,14 @@
    [:label {:class "label-theme"
             :for "source"}
     "How did you hear about this?"]
-   (select-control
+   (g/select
     {:id "source"
-     :name "source"}
-    (option (:source values) "" "Choose one")
-    (option (:source values) "friend" "Friend")
-    (option (:source values) "search" "Search")
-    (option (:source values) "other" "Other"))])
+     :name "source"
+     :value (:source values)
+     :placeholder "Choose one"
+     :options [{:value "friend" :label "Friend"}
+               {:value "search" :label "Search"}
+               {:value "other" :label "Other"}]})])
 
 (defn- newsletter-checkbox
   [values]
@@ -671,7 +556,7 @@
    [:input (cond-> {:type "checkbox"
                     :name "newsletter"
                     :value "yes"}
-             (= "yes" (:newsletter values))
+             (util/checked-value? (:newsletter values) "yes")
              (assoc :checked true))]
    [:span "Send occasional updates"]])
 
@@ -680,7 +565,7 @@
   (section-card
    (section-heading
     "Step 1: Account"
-    "Client-side rules run immediately. Server-side availability checks run after a valid field pauses or blurs.")
+    "Client-side rules run immediately. Server-side checks run after a valid field pauses or blurs.")
    [:div {:class "grid grid-cols-1 md:grid-cols-2 gap-4"}
     (username-field values errors)
     (email-field values errors)]
@@ -735,11 +620,10 @@
    {:label-text "Store name"
     :for :storeName
     :schema store-schema
-    :control (input-control
-              (maybe-value
-               {:type "text"
-                :name "storeName"}
-               (:storeName values)))
+    :control (g/input
+              {:type "text"
+               :name "storeName"
+               :value (:storeName values)})
     :description "Try headquarters, corporate, or main office to see a server-side error."
     :error (:storeName errors)}))
 
@@ -749,13 +633,14 @@
    {:label-text "Store type"
     :for :storeType
     :schema store-schema
-    :control (select-control
-              {:name "storeType"}
-              (option (:storeType values) "" "Choose one")
-              (option (:storeType values) "retail" "Retail")
-              (option (:storeType values) "grocery" "Grocery")
-              (option (:storeType values) "clinic" "Clinic")
-              (option (:storeType values) "service" "Service"))
+    :control (g/select
+              {:name "storeType"
+               :value (:storeType values)
+               :placeholder "Choose one"
+               :options [{:value "retail" :label "Retail"}
+                         {:value "grocery" :label "Grocery"}
+                         {:value "clinic" :label "Clinic"}
+                         {:value "service" :label "Service"}]})
     :description "Required select control."
     :error (:storeType errors)}))
 
@@ -765,11 +650,10 @@
    {:label-text "Team size"
     :for :employeeCount
     :schema store-schema
-    :control (input-control
-              (maybe-value
-               {:type "number"
-                :name "employeeCount"}
-               (:employeeCount values)))
+    :control (g/input
+              {:type "number"
+               :name "employeeCount"
+               :value (:employeeCount values)})
     :description "1 to 500."
     :error (:employeeCount errors)}))
 
@@ -779,11 +663,10 @@
    {:label-text "Opening date"
     :for :openingDate
     :schema store-schema
-    :control (input-control
-              (maybe-value
-               {:type "date"
-                :name "openingDate"}
-               (:openingDate values)))
+    :control (g/input
+              {:type "date"
+               :name "openingDate"
+               :value (:openingDate values)})
     :description "Date picker control."
     :error (:openingDate errors)}))
 
@@ -793,13 +676,14 @@
    {:label-text "Timezone"
     :for :timezone
     :schema store-schema
-    :control (select-control
-              {:name "timezone"}
-              (option (:timezone values) "" "Choose one")
-              (option (:timezone values) "America/Los_Angeles" "Pacific")
-              (option (:timezone values) "America/Denver" "Mountain")
-              (option (:timezone values) "America/Chicago" "Central")
-              (option (:timezone values) "America/New_York" "Eastern"))
+    :control (g/select
+              {:name "timezone"
+               :value (:timezone values)
+               :placeholder "Choose one"
+               :options [{:value "America/Los_Angeles" :label "Pacific"}
+                         {:value "America/Denver" :label "Mountain"}
+                         {:value "America/Chicago" :label "Central"}
+                         {:value "America/New_York" :label "Eastern"}]})
     :description "Another authored select control."
     :error (:timezone errors)}))
 
@@ -844,7 +728,7 @@
    [:input (cond-> {:type "radio"
                     :name "preferredContact"
                     :value value}
-             (checked? preferred value)
+             (util/checked-value? preferred value)
              (assoc :checked true))]
    [:span label]])
 
@@ -864,12 +748,11 @@
    {:label-text "Phone"
     :for :phone
     :schema preferences-schema
-    :control (input-control
-              (maybe-value
-               {:type "tel"
-                :name "phone"
-                :autocomplete "tel"}
-               (:phone values)))
+    :control (g/input
+              {:type "tel"
+               :name "phone"
+               :autocomplete "tel"
+               :value (:phone values)})
     :description "Required only if preferred contact is Phone."
     :error (:phone errors)}))
 
@@ -879,12 +762,11 @@
    {:label-text "Alert email"
     :for :alertEmail
     :schema preferences-schema
-    :control (input-control
-              (maybe-value
-               {:type "email"
-                :name "alertEmail"
-                :autocomplete "email"}
-               (:alertEmail values)))
+    :control (g/input
+              {:type "email"
+               :name "alertEmail"
+               :autocomplete "email"
+               :value (:alertEmail values)})
     :description "Optional. Try bounce@example.com for a server-side error."
     :error (:alertEmail errors)}))
 
@@ -894,7 +776,7 @@
    [:input (cond-> {:type "checkbox"
                     :name "sendAlerts"
                     :value "yes"}
-             (= "yes" (:sendAlerts values))
+             (util/checked-value? (:sendAlerts values) "yes")
              (assoc :checked true))]
    [:span "Send urgent alerts"]])
 
@@ -904,9 +786,9 @@
    {:label-text "Notes"
     :for :notes
     :schema preferences-schema
-    :control (textarea-control
-              {:name "notes"}
-              (:notes values))
+    :control (g/textarea
+              {:name "notes"
+               :value (:notes values)})
     :description "Optional. Max 240 characters."
     :error (:notes errors)}))
 
@@ -1115,15 +997,15 @@
 
 (defn account-page
   [ctx]
-  (html-response (flow-fragment ctx :account)))
+  (g/html-response (flow-fragment ctx :account)))
 
 (defn store-page
   [ctx]
-  (html-response (flow-fragment ctx :store)))
+  (g/html-response (flow-fragment ctx :store)))
 
 (defn preferences-page
   [ctx]
-  (html-response (flow-fragment ctx :preferences)))
+  (g/html-response (flow-fragment ctx :preferences)))
 
 (defn validate-account
   [{:keys [params]}]
@@ -1147,7 +1029,7 @@
   [{:keys [params] :as ctx}]
   (let [values (account-values params)
         errors (submit-account-errors values)]
-    (html-response
+    (g/html-response
      (if (seq errors)
        (flow-fragment ctx :account values errors)
        (flow-fragment ctx :store)))))
@@ -1156,7 +1038,7 @@
   [{:keys [params] :as ctx}]
   (let [values (store-values params)
         errors (submit-store-errors values)]
-    (html-response
+    (g/html-response
      (if (seq errors)
        (flow-fragment ctx :store values errors)
        (flow-fragment ctx :preferences)))))
@@ -1165,7 +1047,7 @@
   [{:keys [params] :as ctx}]
   (let [values (preferences-values params)
         errors (submit-preferences-errors values)]
-    (html-response
+    (g/html-response
      (if (seq errors)
        (flow-fragment ctx :preferences values errors)
        (done-fragment ctx)))))
