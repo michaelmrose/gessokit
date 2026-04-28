@@ -14,7 +14,9 @@
             [clojure.tools.namespace.repl :as tn-repl]
             [malli.core :as malc]
             [malli.registry :as malr]
-            [nrepl.cmdline :as nrepl-cmd])
+            [nrepl.cmdline :as nrepl-cmd]
+            [gessotest.form-flow-demo.core :as form-flow-demo]
+            )
   (:gen-class))
 
 (def modules
@@ -22,7 +24,9 @@
    (biff-auth/module {})
    home/module
    schema/module
-   worker/module])
+   worker/module
+   form-flow-demo/module
+   ])
 
 (def routes [["" {:middleware [mid/wrap-site-defaults]}
               (keep :routes modules)]

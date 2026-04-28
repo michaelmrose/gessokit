@@ -16,6 +16,7 @@
    [gesso.live.app :as live.app]
    [gessotest.shared-counter :as shared-counter]
    [gessotest.simple-shared-counter :as simple-shared-counter]
+   [gessotest.form-flow-demo.core :as form-flow-demo]
    ))
 
 (defn- section-heading
@@ -856,6 +857,9 @@
 {:slug "bars-demo"
     :title "Bars demo"
     :description "A full-page demo of the bars navigation shell, including topbar, sidebar, and hamburger behavior."}
+{:slug "form-flow-demo"
+ :title "Form flow demo"
+ :description "A multi-step form demo with fields, client validation, server validation, HTMX OOB errors, and chained form progression."}
    ])
 
 (defn- pages-section []
