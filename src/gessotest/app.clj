@@ -17,6 +17,7 @@
    [gessotest.shared-counter :as shared-counter]
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.form-flow-demo.core :as form-flow-demo]
+   [gessotest.toaster-demo :as toaster-demo]
    ))
 
 (defn- section-heading
@@ -905,7 +906,8 @@
     (pages-section)
     (shared-counter/section)
     (simple-shared-counter/section )
-
+    (toaster-demo/section)
+    (scroll-buffer {:size :lg})
     ]))
 
 (defn set-foo [{:keys [session params] :as ctx}]
@@ -1008,8 +1010,6 @@
 (def live-system
   (live.app/simple-system
    {:configs [shared-counter/live-config]}))
-
-
 
 (def module
   {:static {"/about/" about-page}

@@ -196,7 +196,10 @@
                    {:theme-options theme-options}))
 
            [:main {:class "flex-grow py-10"}
-            (apply container body)]])))
+            (apply container body)]
+
+           (toaster {:id "app-toaster"
+                     :position :bottom-right})])))
 
 (defn page-shell
   "Like page, but does not force the centered container.
@@ -211,7 +214,10 @@
                    {:theme-options theme-options}))
 
            (into [:main {:class "flex-grow py-10"}]
-                 body)])))
+                 body)
+
+           (toaster {:id "app-toaster"
+                     :position :bottom-right})])))
 
 (defn on-error [{:keys [status] :as ctx}]
   {:status status
