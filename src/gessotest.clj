@@ -17,7 +17,7 @@
             [nrepl.cmdline :as nrepl-cmd]
             [gessotest.form-flow-demo.core :as form-flow-demo]
             [gessotest.toaster-demo :as toaster-demo]
-            [gessotest.toaster-live-demo :as toaster-live-demo]
+            [gessotest.client-plumbing :as client-plumbing]
             )
   (:gen-class))
 
@@ -29,7 +29,7 @@
    worker/module
    form-flow-demo/module
    toaster-demo/module
-   toaster-live-demo/module
+   client-plumbing/module
    ])
 
 (def routes [["" {:middleware [mid/wrap-site-defaults]}
