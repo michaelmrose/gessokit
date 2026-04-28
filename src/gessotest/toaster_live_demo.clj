@@ -1,25 +1,40 @@
 (ns gessotest.toaster-live-demo
   "Tiny demo of app-owned client plumbing + Gesso toaster.
 
-   This namespace owns the toast-specific demo behavior. The shared browser
-   client plumbing lives in gessotest.client-plumbing."
+   This namespace owns only toast-specific demo behavior.
+
+   The shared browser-client delivery plumbing lives in
+   gessotest.client-plumbing."
   (:require
    [gesso.core :as g]
    [gessotest.client-plumbing :as plumbing]))
 
+;; -----------------------------------------------------------------------------
+;; Toast OOB helpers
+;; -----------------------------------------------------------------------------
+
+(defn normalize-toast
+  [toast]
+  (merge {:variant :info
+          :title "Live event"
+          :description "This toast was sent through app client plumbing."}
+         toast))
+
 (defn toast-oob
   [toast]
   (g/render-toast-oob
-   (merge {:variant :info
-           :title "Live event"
-           :description "This toast was sent through app client plumbing."}
-          toast)))
+   (normalize-toast toast)))
+
+;; -----------------------------------------------------------------------------
+;; Demo send helpers
+;; -----------------------------------------------------------------------------
 
 (defn send-toast-to-client!
   [client-id toast]
-  (merge
-   (plumbing/send-oob-to-client! client-id (toast-oob toast))
-   {:toast toast}))
+  (let [toast' (normalize-toast toast)]
+    (merge
+     (plumbing/send-to-client! client-id (g/render-toast-oob toast'))
+     {:toast toast'})))
 
 (defn send-toast-to-latest-client!
   [toast]
@@ -31,9 +46,10 @@
 
 (defn broadcast-toast!
   [toast]
-  (merge
-   (plumbing/broadcast-oob! (toast-oob toast))
-   {:toast toast}))
+  (let [toast' (normalize-toast toast)]
+    (merge
+     (plumbing/broadcast! (g/render-toast-oob toast'))
+     {:toast toast'})))
 
 (defn send-sample-toast!
   []
@@ -56,6 +72,10 @@
    {:variant :danger
     :title "Server-side problem"
     :description "This danger toast was sent through the toaster demo."}))
+
+;; -----------------------------------------------------------------------------
+;; Demo UI
+;; -----------------------------------------------------------------------------
 
 (defn section
   []

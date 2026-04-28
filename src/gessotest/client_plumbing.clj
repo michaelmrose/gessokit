@@ -1,25 +1,25 @@
 (ns gessotest.client-plumbing
-  "Small app-owned browser-client communication plumbing.
+  "Small app-owned browser-client communication adapter.
 
-   This is not Gesso component code. It is application machinery for talking to
-   connected browser clients from many app namespaces without each namespace
-   rewriting SSE streams, pending OOB queues, and client targeting.
+   This namespace owns app policy and route placement for connected-client OOB
+   delivery.
 
-   It knows about:
-   - connected browser clients
-   - SSE wakeups
-   - pending HTMX out-of-band fragments
+   It does not implement the generic live OOB machinery itself. Gesso owns that
+   in gesso.live.oob.
 
-   It does not know about:
-   - toasts
-   - notification semantics
-   - REPL demos
-   - app domain events"
+   This namespace decides:
+   - where the stream/pending routes live
+   - which middleware protects them
+   - how this app identifies a user
+   - which scopes a connected browser client belongs to
+   - app-friendly wrapper names for sending arbitrary OOB fragments."
   (:require
    [gesso.core :as g]
-   [gesso.live.htmx :as live-htmx]
-   [gesso.live.transport.sse :as sse]
-   [gessotest.middleware :as mid]))
+   [gesso.live.oob :as live-oob]
+   [gessotest.middleware :as mid])
+  (:import
+   [java.net URLEncoder]
+   [java.nio.charset StandardCharsets]))
 
 ;; -----------------------------------------------------------------------------
 ;; Paths
@@ -34,53 +34,13 @@
 (def pending-path
   (str base-path "/pending"))
 
-(def wake-event
-  "client-oob")
-
-;; -----------------------------------------------------------------------------
-;; State
-;; -----------------------------------------------------------------------------
-
-;; client-id -> {:id client-id
-;;               :user-id user-id
-;;               :queue LinkedBlockingQueue
-;;               :connected-at millis}
-(defonce clients
-  (atom {}))
-
-;; client-id -> [hiccup-oob-node hiccup-oob-node ...]
-;;
-;; Stored values should already be HTMX OOB fragments, e.g.
-;;
-;;   [:div {:id "some-target" :hx-swap-oob "innerHTML"} ...]
-;;
-;; This namespace does not care what the OOB fragment represents.
-(defonce pending-oob
-  (atom {}))
-
-(when-not (map? @clients)
-  (reset! clients {}))
-
-(when-not (map? @pending-oob)
-  (reset! pending-oob {}))
-
-(defn reset-plumbing!
-  []
-  (reset! clients {})
-  (reset! pending-oob {})
-  :reset)
-
 ;; -----------------------------------------------------------------------------
 ;; Request/client helpers
 ;; -----------------------------------------------------------------------------
 
 (defn new-client-id
   []
-  (str (random-uuid)))
-
-(defn- now-ms
-  []
-  (System/currentTimeMillis))
+  (live-oob/new-client-id))
 
 (defn- request-param
   [params k]
@@ -106,263 +66,156 @@
        (get-in ctx [:session :uid])
        "demo-user")))
 
-;; -----------------------------------------------------------------------------
-;; Client registry
-;; -----------------------------------------------------------------------------
+(defn current-client-scopes
+  "Return app-defined scopes for the connected browser client.
 
-(defn- add-client!
-  [client-id user-id queue]
-  (swap! clients assoc client-id
-         {:id client-id
-          :user-id (str user-id)
-          :queue queue
-          :connected-at (now-ms)}))
+   Scopes are opaque values to Gesso. App code decides what they mean.
 
-(defn- remove-client!
-  [client-id queue]
-  (swap! clients
-         (fn [m]
-           ;; Avoid removing a newer connection that reused the same client id.
-           (if (= queue (get-in m [client-id :queue]))
-             (dissoc m client-id)
-             m))))
-
-(defn connected-clients
-  []
-  (->> @clients
-       vals
-       (sort-by :connected-at)
-       vec))
-
-(defn connected-client-ids
-  []
-  (mapv :id (connected-clients)))
-
-(defn latest-client-id
-  []
-  (some-> (connected-clients)
-          last
-          :id))
-
-(defn clients-for-user
-  [user-id]
-  (->> @clients
-       vals
-       (filter #(= (str user-id) (:user-id %)))
-       (sort-by :connected-at)
-       vec))
-
-(defn pending-counts
-  []
-  (->> @pending-oob
-       (map (fn [[client-id nodes]]
-              [client-id (count nodes)]))
-       (into {})))
-
-(defn state-summary
-  []
-  {:clients (connected-clients)
-   :pending (pending-counts)})
-
-;; -----------------------------------------------------------------------------
-;; SSE stream
-;; -----------------------------------------------------------------------------
-
-(defn stream
-  "SSE endpoint for connected browser clients.
-
-   This stream sends wakeup events only. The browser receives:
-
-     event: client-oob
-     data: {}
-
-   and then HTMX fetches this client's pending OOB fragments."
+   Examples a real app might include:
+     [:user user-id]
+     [:store store-id]
+     [:request request-id]"
   [ctx]
-  (let [client-id (client-id-from-ctx ctx)
-        user-id   (current-user-id ctx)
-        queue     (sse/new-queue)]
-    (add-client! client-id user-id queue)
-    (sse/queue-stream-response
-     {:queue queue
-      :on-close #(remove-client! client-id queue)})))
+  (let [user-id (current-user-id ctx)]
+    #{[:user user-id]
+      [:demo :gessotest]}))
+
+(defn current-client
+  [ctx]
+  {:client/user-id (current-user-id ctx)
+   :client/scopes  (current-client-scopes ctx)})
 
 ;; -----------------------------------------------------------------------------
-;; Wakeup
+;; Channel
 ;; -----------------------------------------------------------------------------
 
-(defn wake-client!
-  ([client-id]
-   (wake-client! client-id wake-event))
-  ([client-id event]
-   (if-let [queue (get-in @clients [client-id :queue])]
-     (do
-       (sse/offer! queue {:event event
-                          :data "{}"})
-       true)
-     false)))
+(defonce channel
+  (live-oob/channel
+   {:id :gessotest/client-oob
+    :event "client-oob"
+    :client current-client}))
 
-(defn wake-user!
-  ([user-id]
-   (wake-user! user-id wake-event))
-  ([user-id event]
-   (let [targets (clients-for-user user-id)]
-     {:user-id (str user-id)
-      :sent (count targets)
-      :results
-      (mapv
-       (fn [{:keys [id]}]
-         {:client-id id
-          :woke? (wake-client! id event)})
-       targets)})))
+(defn reset-plumbing!
+  []
+  (live-oob/reset-channel! channel))
 
 ;; -----------------------------------------------------------------------------
-;; Pending OOB mailbox
+;; URLs and listener markup
 ;; -----------------------------------------------------------------------------
 
-(defn- enqueue-pending-oob!
-  [client-id node]
-  (swap! pending-oob update client-id (fnil conj []) node))
+(defn- url-encode
+  [x]
+  (URLEncoder/encode (str x) (.name StandardCharsets/UTF_8)))
 
-(defn- enqueue-pending-oobs!
-  [client-id nodes]
-  (swap! pending-oob update client-id (fnil into []) nodes))
+(defn- append-client-id
+  [url client-id]
+  (str url "?client-id=" (url-encode client-id)))
 
-(defn- drain-pending-oob!
+(defn stream-url
   [client-id]
-  (loop []
-    (let [m     @pending-oob
-          nodes (get m client-id [])]
-      (if (compare-and-set! pending-oob m (dissoc m client-id))
-        nodes
-        (recur)))))
+  (append-client-id stream-path client-id))
 
-(defn send-oob-to-client!
-  "Queue one OOB node for one connected client and wake that client.
-
-   The node should normally already contain hx-swap-oob."
-  [client-id node]
-  (if (get @clients client-id)
-    (do
-      (enqueue-pending-oob! client-id node)
-      {:sent 1
-       :woke? (wake-client! client-id)
-       :client-id client-id
-       :pending (count (get @pending-oob client-id))})
-    {:sent 0
-     :woke? false
-     :client-id client-id
-     :error :client-not-connected}))
-
-(defn send-oobs-to-client!
-  "Queue multiple OOB nodes for one connected client and wake that client once."
-  [client-id nodes]
-  (if (get @clients client-id)
-    (do
-      (enqueue-pending-oobs! client-id (remove nil? nodes))
-      {:sent 1
-       :woke? (wake-client! client-id)
-       :client-id client-id
-       :pending (count (get @pending-oob client-id))})
-    {:sent 0
-     :woke? false
-     :client-id client-id
-     :error :client-not-connected}))
-
-(defn send-oob-to-user!
-  "Queue one OOB node for every connected client belonging to user-id."
-  [user-id node]
-  (let [targets (clients-for-user user-id)]
-    (doseq [{:keys [id]} targets]
-      (enqueue-pending-oob! id node))
-    {:user-id (str user-id)
-     :sent (count targets)
-     :results
-     (mapv
-      (fn [{:keys [id]}]
-        {:client-id id
-         :woke? (wake-client! id)})
-      targets)}))
-
-(defn send-oobs-to-user!
-  "Queue multiple OOB nodes for every connected client belonging to user-id."
-  [user-id nodes]
-  (let [targets (clients-for-user user-id)
-        nodes'  (remove nil? nodes)]
-    (doseq [{:keys [id]} targets]
-      (enqueue-pending-oobs! id nodes'))
-    {:user-id (str user-id)
-     :sent (count targets)
-     :results
-     (mapv
-      (fn [{:keys [id]}]
-        {:client-id id
-         :woke? (wake-client! id)})
-      targets)}))
-
-(defn broadcast-oob!
-  "Queue one OOB node for every connected client.
-
-   This should be explicit and rare in real apps."
-  [node]
-  (let [targets (connected-clients)]
-    (doseq [{:keys [id]} targets]
-      (enqueue-pending-oob! id node))
-    {:sent (count targets)
-     :results
-     (mapv
-      (fn [{:keys [id]}]
-        {:client-id id
-         :woke? (wake-client! id)})
-      targets)}))
-
-(defn broadcast-oobs!
-  "Queue multiple OOB nodes for every connected client."
-  [nodes]
-  (let [targets (connected-clients)
-        nodes'  (remove nil? nodes)]
-    (doseq [{:keys [id]} targets]
-      (enqueue-pending-oobs! id nodes'))
-    {:sent (count targets)
-     :results
-     (mapv
-      (fn [{:keys [id]}]
-        {:client-id id
-         :woke? (wake-client! id)})
-      targets)}))
-
-(defn pending-handler
-  "HTMX endpoint triggered by sse:client-oob.
-
-   Drains this connected client's OOB mailbox and returns those fragments."
-  [ctx]
-  (let [client-id (client-id-from-ctx ctx)
-        nodes     (drain-pending-oob! client-id)]
-    (if (seq nodes)
-      (g/html-response
-       (into [:<>] (remove nil?) nodes))
-      (g/no-content))))
-
-;; -----------------------------------------------------------------------------
-;; Browser hook
-;; -----------------------------------------------------------------------------
+(defn pending-url
+  [client-id]
+  (append-client-id pending-path client-id))
 
 (defn listener
   "Render one browser-client listener.
 
    Mount this on pages that need app-owned server-to-client OOB updates."
   [client-id]
-  (live-htmx/sse-callback
-   {:id (str "client-plumbing-listener-" client-id)
-    :stream-url (str stream-path "?client-id=" client-id)
-    :event wake-event
-    :get (str pending-path "?client-id=" client-id)
-    :swap "none"
+  (live-oob/listener
+   channel
+   {:client/id client-id
+    :id (str "client-plumbing-listener-" client-id)
+    :stream-url (stream-url client-id)
+    :pending-url (pending-url client-id)
     :attrs {:data-client-plumbing-listener true}}))
 
 (defn app-listener
   "Convenience listener for app shells that do not need to expose client-id."
   [_ctx]
   (listener (new-client-id)))
+
+;; -----------------------------------------------------------------------------
+;; Route handlers
+;; -----------------------------------------------------------------------------
+
+(defn stream
+  [ctx]
+  (let [client-id (client-id-from-ctx ctx)]
+    (live-oob/stream-response channel ctx client-id)))
+
+(defn pending
+  [ctx]
+  (let [client-id (client-id-from-ctx ctx)]
+    (if-let [fragment (live-oob/drain-fragment! channel client-id)]
+      (g/html-response fragment)
+      (g/no-content))))
+
+;; -----------------------------------------------------------------------------
+;; Generic sending API
+;; -----------------------------------------------------------------------------
+
+(defn send!
+  "Send arbitrary OOB fragments to a target.
+
+   Target forms:
+     :all
+     [:client client-id]
+     [:user user-id]
+     [:scope scope]"
+  [to & oob-nodes]
+  (live-oob/send!
+   channel
+   {:to to
+    :oob oob-nodes}))
+
+(defn send-to-client!
+  "Send arbitrary OOB fragments to one connected browser client."
+  [client-id & oob-nodes]
+  (apply send! [:client client-id] oob-nodes))
+
+(defn send-to-user!
+  "Send arbitrary OOB fragments to all connected browser clients for one user."
+  [user-id & oob-nodes]
+  (apply send! [:user (str user-id)] oob-nodes))
+
+(defn send-to-scope!
+  "Send arbitrary OOB fragments to all connected browser clients for one scope."
+  [scope & oob-nodes]
+  (apply send! [:scope scope] oob-nodes))
+
+(defn broadcast!
+  "Send arbitrary OOB fragments to every connected browser client.
+
+   This should be explicit and rare in real apps."
+  [& oob-nodes]
+  (apply send! :all oob-nodes))
+
+;; -----------------------------------------------------------------------------
+;; Introspection
+;; -----------------------------------------------------------------------------
+
+(defn connected-clients
+  []
+  (live-oob/connected-clients channel))
+
+(defn connected-client-ids
+  []
+  (live-oob/connected-client-ids channel))
+
+(defn latest-client-id
+  []
+  (live-oob/latest-client-id channel))
+
+(defn pending-counts
+  []
+  (live-oob/pending-counts channel))
+
+(defn state-summary
+  []
+  (live-oob/state-summary channel))
 
 ;; -----------------------------------------------------------------------------
 ;; Biff module
@@ -374,4 +227,4 @@
      {:middleware [mid/wrap-signed-in]}
 
      ["/stream" {:get stream}]
-     ["/pending" {:get pending-handler}]]]})
+     ["/pending" {:get pending}]]]})
