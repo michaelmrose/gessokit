@@ -517,10 +517,31 @@
      (preferences-actions))))
 
 ;; -----------------------------------------------------------------------------
-;; Flow shell
+;; Flow fragments
 ;; -----------------------------------------------------------------------------
 
-(defn- active-form
+(def flow-target-id
+  "complex-form-flow")
+
+(def initial-step
+  :account)
+
+(defn- flow-root
+  "Wrap flow content in the stable HTMX target.
+
+   Normal active-step fragments and the final done fragment both replace this
+   same DOM node."
+  [& children]
+  (into
+   [:div {:id flow-target-id
+          :class "content-stack-theme"}]
+   children))
+
+(defn- active-step-form
+  "Render the form for the current in-progress step.
+
+   The terminal :done state is intentionally not handled here. Completion uses
+   done-fragment, which replaces the whole flow target."
   [ctx current values errors]
   (case current
     :account
@@ -532,44 +553,55 @@
     :preferences
     (preferences-form ctx values errors)
 
-    :done
-    [:div]
-
+    ;; Defensive fallback for unknown states.
     (account-form ctx values errors)))
 
+(defn- flow-intro-card
+  [current]
+  (section-card
+   (section-heading
+    "Tabbed form flow"
+    "Each tab is a separate form. The active tab advances only after the current form validates and submits.")
+   (tab-bar current)))
+
 (defn flow-fragment
+  "Render the active form-flow fragment.
+
+   This is the normal fragment for :account, :store, and :preferences. Failed
+   validation can re-render the same step with submitted values and errors."
   ([ctx current]
    (flow-fragment ctx current {} {}))
   ([ctx current values errors]
-   [:div {:id "complex-form-flow"
-          :class "content-stack-theme"}
-    (section-card
-     (section-heading
-      "Tabbed form flow"
-      "Each tab is a separate form. The active tab advances only after the current form validates and submits.")
-     (tab-bar current))
-    (active-form ctx current values errors)]
-   ))
+   (flow-root
+    (flow-intro-card current)
+    (active-step-form ctx current values errors))))
+
+(defn- done-panel
+  []
+  [:div {:class "panel-theme radius-lg pad-card"
+         :style {:border "var(--border-width, 1px) solid var(--border)"
+                 :background "color-mix(in srgb, var(--card) 96%, var(--background))"
+                 :color "var(--card-foreground)"
+                 :box-shadow "0 18px 50px color-mix(in srgb, black 22%, transparent)"}}
+   [:p {:class "font-body text-base-theme leading-body"}
+    "Success. This page exercised chained forms, disabled tab navigation, local browser validation, server-side OOB validation, arbitrary nested content, and final submission."]])
 
 (defn done-fragment
+  "Render the terminal success fragment.
+
+   This replaces the same #complex-form-flow target as flow-fragment, but it is
+   no longer an active form step."
   [_ctx]
-  [:div {:id "complex-form-flow"
-         :class "content-stack-theme"}
+  (flow-root
    (section-card
     (section-heading
      "Form submitted"
      "The final form submitted successfully. No data was persisted in this demo.")
     (tab-bar :done)
-    [:div {:class "panel-theme radius-lg pad-card"
-           :style {:border "var(--border-width, 1px) solid var(--border)"
-                   :background "color-mix(in srgb, var(--card) 96%, var(--background))"
-                   :color "var(--card-foreground)"
-                   :box-shadow "0 18px 50px color-mix(in srgb, black 22%, transparent)"}}
-     [:p {:class "font-body text-base-theme leading-body"}
-      "Success. This page exercised chained forms, disabled tab navigation, local browser validation, server-side OOB validation, arbitrary nested content, and final submission."]]
+    (done-panel)
     [:a {:href base-path
          :class "btn-outline"}
-     "Start over"])])
+     "Start over"])))
 
 ;; -----------------------------------------------------------------------------
 ;; Page
