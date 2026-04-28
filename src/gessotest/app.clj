@@ -18,6 +18,7 @@
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.form-flow-demo.core :as form-flow-demo]
    [gessotest.toaster-demo :as toaster-demo]
+   [gessotest.toaster-live-demo :as toaster-live-demo]
    ))
 
 (defn- section-heading
@@ -907,6 +908,7 @@
     (shared-counter/section)
     (simple-shared-counter/section )
     (toaster-demo/section)
+    (toaster-live-demo/section)
     (scroll-buffer {:size :lg})
     ]))
 
