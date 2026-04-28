@@ -182,7 +182,7 @@
       ;; intentionally not semantically ideal; remove if this becomes a real
       ;; account/signup form.
       :autocomplete "new-password"
-
+      :spellcheck "false"
       :value (:username values)})
     :description "Try 1demo, admin, support, root, michael, or demo to see server-side errors."
     :error (:username errors)}))
