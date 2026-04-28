@@ -548,7 +548,8 @@
       "Tabbed form flow"
       "Each tab is a separate form. The active tab advances only after the current form validates and submits.")
      (tab-bar current))
-    (active-form ctx current values errors)]))
+    (active-form ctx current values errors)]
+   ))
 
 (defn done-fragment
   [_ctx]
@@ -589,7 +590,9 @@
          :style {:color "var(--muted-foreground)"}}
      "A tabbed, route-driven, multi-step form demo using the public Gesso facade: field, form, validation, and HTMX OOB error targets."]]
 
-   (flow-fragment ctx :account)])
+   (flow-fragment ctx :account)
+
+   (g/scroll-buffer {:size :lg})])
 
 (defn page-view
   [ctx]
