@@ -16,6 +16,7 @@
             [malli.registry :as malr]
             [nrepl.cmdline :as nrepl-cmd]
             [gessotest.form-flow-demo.core :as form-flow-demo]
+            [gessotest.toaster-demo :as toaster-demo]
             )
   (:gen-class))
 
@@ -26,6 +27,7 @@
    schema/module
    worker/module
    form-flow-demo/module
+   toaster-demo/module
    ])
 
 (def routes [["" {:middleware [mid/wrap-site-defaults]}
