@@ -33,7 +33,7 @@
   [client-id toast]
   (let [toast' (normalize-toast toast)]
     (merge
-     (plumbing/send-to-client! client-id (g/render-toast-oob toast'))
+     (plumbing/send-to-client! client-id (toast-oob toast'))
      {:toast toast'})))
 
 (defn send-toast-to-latest-client!
@@ -48,7 +48,7 @@
   [toast]
   (let [toast' (normalize-toast toast)]
     (merge
-     (plumbing/broadcast! (g/render-toast-oob toast'))
+     (plumbing/broadcast! (toast-oob toast'))
      {:toast toast'})))
 
 (defn send-sample-toast!
@@ -78,39 +78,48 @@
 ;; -----------------------------------------------------------------------------
 
 (defn section
-  []
-  (let [client-id (plumbing/new-client-id)]
-    [:section {:class "panel-theme radius-lg pad-card content-stack-theme"}
-     [:div {:class "title-stack-theme"}
-      [:h2 {:class "font-heading text-xl-theme leading-heading tracking-heading weight-semibold-theme"}
-       "Live toaster"]
+  "Render the live toaster demo.
 
-      [:p {:class "font-body text-sm-theme leading-body"
-           :style {:color "var(--muted-foreground)"}}
-       "This section uses shared app client plumbing to connect one browser client over SSE and send server-triggered toasts into the page-shell toaster."]
+   The zero-arity form is kept for existing call sites. Prefer passing ctx when
+   available so this mirrors normal app usage."
+  ([]
+   (section nil))
+  ([ctx]
+   (let [client-id (plumbing/new-client-id)]
+     [:section {:class "panel-theme radius-lg pad-card content-stack-theme"}
+      [:div {:class "title-stack-theme"}
+       [:h2 {:class "font-heading text-xl-theme leading-heading tracking-heading weight-semibold-theme"}
+        "Live toaster"]
 
-      [:p {:class "font-body text-sm-theme leading-body"
-           :style {:color "var(--muted-foreground)"}}
-       "Client id: "
-       [:code client-id]]]
+       [:p {:class "font-body text-sm-theme leading-body"
+            :style {:color "var(--muted-foreground)"}}
+        "This section uses shared app client plumbing to connect one browser client over SSE and send server-triggered toasts into the page-shell toaster."]
 
-     (plumbing/listener client-id)
+       [:p {:class "font-body text-sm-theme leading-body"
+            :style {:color "var(--muted-foreground)"}}
+        "Client id: "
+        [:code client-id]]]
 
-     [:div {:class "content-stack-theme"}
-      [:p {:class "font-body text-sm-theme leading-body"}
-       "REPL examples:"]
+      ;; Important: pass both ctx and the displayed client id.
+      ;; Calling (plumbing/listener client-id) would treat client-id as ctx and
+      ;; generate a different connected client id.
+      (plumbing/listener ctx client-id)
 
-      [:pre {:class "panel-theme radius-md pad-card overflow-auto text-sm-theme"}
-       "(require '[gessotest.toaster-live-demo :as toaster-live])\n"
-       "(require '[gessotest.client-plumbing :as plumbing])\n\n"
-       "(plumbing/state-summary)\n"
-       "(toaster-live/send-sample-toast!)\n\n"
-       "(toaster-live/send-toast-to-client!\n"
-       "  \"" client-id "\"\n"
-       "  {:variant :warning\n"
-       "   :title \"Targeted SSE toast\"\n"
-       "   :description \"Only this connected client should receive this.\"})\n\n"
-       "(toaster-live/broadcast-toast!\n"
-       "  {:variant :info\n"
-       "   :title \"Broadcast\"\n"
-       "   :description \"Every connected client receives this.\"})"]]]))
+      [:div {:class "content-stack-theme"}
+       [:p {:class "font-body text-sm-theme leading-body"}
+        "REPL examples:"]
+
+       [:pre {:class "panel-theme radius-md pad-card overflow-auto text-sm-theme"}
+        "(require '[gessotest.toaster-live-demo :as toaster-live])\n"
+        "(require '[gessotest.client-plumbing :as plumbing])\n\n"
+        "(plumbing/state-summary)\n"
+        "(toaster-live/send-sample-toast!)\n\n"
+        "(toaster-live/send-toast-to-client!\n"
+        "  \"" client-id "\"\n"
+        "  {:variant :warning\n"
+        "   :title \"Targeted SSE toast\"\n"
+        "   :description \"Only this connected client should receive this.\"})\n\n"
+        "(toaster-live/broadcast-toast!\n"
+        "  {:variant :info\n"
+        "   :title \"Broadcast\"\n"
+        "   :description \"Every connected client receives this.\"})"]]])))
