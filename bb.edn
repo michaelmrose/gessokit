@@ -4,7 +4,8 @@
  {your/gesso-lib-name {:local/root "../gesso"}}
 
  :tasks
- {dev
+ {
+  dev
   (shell "clj -M:dev dev")
 
   themes
@@ -17,4 +18,5 @@
       (babashka.classpath/add-classpath (str gesso-path "/resources")))
     ((requiring-resolve 'gesso.build.themes/build!)
      {:input-dir "resources/themes"
-      :output-file "resources/public/gesso/app-themes.css"}))}}
+      :output-file "resources/public/gesso/app-themes.css"}))
+  }}
