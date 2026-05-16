@@ -17,6 +17,7 @@
    [gessotest.schema :as schema]
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.toaster-demo :as toaster-demo]
+   [gessotest.microblog :as microblog]
    [gessotest.ui :as ui]
    [gessotest.worker :as worker]
    [malli.core :as malc]
@@ -33,7 +34,9 @@
    form-flow-demo/module
    toaster-demo/module
    simple-shared-counter/module
-   client-plumbing/module])
+   client-plumbing/module
+   microblog/module
+   ])
 
 (def routes
   [["" {:middleware [mid/wrap-site-defaults]}
@@ -84,11 +87,14 @@
 
 (defn gesso-live-rules
   []
-  [{:when-topic :demo-counter
-    :expand (fn [_ctx change]
-              [{:topic (:topic change)
-                :id (:id change)
-                :change/kind (:change/kind change)}])}])
+  (vec
+   (concat
+    [{:when-topic :demo-counter
+      :expand (fn [_ctx change]
+                [{:topic (:topic change)
+                  :id (:id change)
+                  :change/kind (:change/kind change)}])}]
+    (mapcat :live-rules modules))))
 
 (defn use-gesso-live
   "Biff-style component that creates the app-wide Gesso Live system.
