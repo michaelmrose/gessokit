@@ -31,46 +31,16 @@
     :swap :innerHTML}))
 
 ;; -----------------------------------------------------------------------------
-;; Temporary local live system for functional testing
-;;
-;; Once this demo works, this should probably be lifted into the main gessotest
-;; system/component setup instead of living as a local defonce.
+;; App live system access
 ;; -----------------------------------------------------------------------------
 
-(defn live-rules
-  []
-  [{:when-topic :demo-counter
-    :expand (fn [_ctx change]
-              [{:topic (:topic change)
-                :id (:id change)
-                :change/kind (:change/kind change)}])}])
-
-(defonce !live-system
-  (atom nil))
-
-(defn live-system
-  []
-  (or @!live-system
-      (let [system (live/create
-                    {:rules (live-rules)
-                     :dispatch-options {:threads 1
-                                        :queue-size 64
-                                        :on-overflow :coalesce}
-                     :fragment-options {:ttl-ms 1000}})]
-        (reset! !live-system system)
-        system)))
-
-(defn close-live-system!
-  []
-  (when-let [system @!live-system]
-    (live/close! system)
-    (reset! !live-system nil))
-  :closed)
-
-(defn wrap-live-system
-  [handler]
-  (fn [ctx]
-    (handler (assoc ctx :gesso.live/system (live-system)))))
+(defn- live-system
+  [ctx]
+  (or (:gesso.live/system ctx)
+      (throw
+       (ex-info "simple-shared-counter requires :gesso.live/system in ctx."
+                {:ctx-keys (when (map? ctx)
+                             (set (keys ctx)))}))))
 
 ;; -----------------------------------------------------------------------------
 ;; UI
@@ -146,10 +116,10 @@
 ;; -----------------------------------------------------------------------------
 
 (defn stream
-  [_ctx]
+  [ctx]
   (:response
    (live/start-sse!
-    (live-system)
+    (live-system ctx)
     counter-subscription
     {:flow-options {:relieve? true}})))
 
@@ -177,8 +147,7 @@
 
 (def module
   {:routes [["/app/demo/simple-shared-counter"
-             {:middleware [mid/wrap-signed-in
-                           wrap-live-system]}
+             {:middleware [mid/wrap-signed-in]}
              ["/stream" {:get stream}]
              ["/fragment" {:get fragment}]
              ["/increment" {:post increment!}]

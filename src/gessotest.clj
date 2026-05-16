@@ -7,21 +7,21 @@
    [com.biffweb :as biff]
    [com.biffweb.experimental :as biffx]
    [com.biffweb.experimental.auth :as biff-auth]
+   [gesso.live.core :as live]
    [gessotest.app :as app]
+   [gessotest.client-plumbing :as client-plumbing]
    [gessotest.email :as email]
    [gessotest.form-flow-demo.core :as form-flow-demo]
    [gessotest.home :as home]
    [gessotest.middleware :as mid]
    [gessotest.schema :as schema]
+   [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.toaster-demo :as toaster-demo]
    [gessotest.ui :as ui]
    [gessotest.worker :as worker]
    [malli.core :as malc]
    [malli.registry :as malr]
-   [nrepl.cmdline :as nrepl-cmd]
-   [gessotest.client-plumbing :as client-plumbing]
-   [gessotest.simple-shared-counter :as simple-shared-counter]
-   )
+   [nrepl.cmdline :as nrepl-cmd])
   (:gen-class))
 
 (def modules
@@ -33,8 +33,7 @@
    form-flow-demo/module
    toaster-demo/module
    simple-shared-counter/module
-   client-plumbing/module
-   ])
+   client-plumbing/module])
 
 (def routes
   [["" {:middleware [mid/wrap-site-defaults]}
@@ -78,6 +77,44 @@
 
 (defonce system
   (atom {}))
+
+;; -----------------------------------------------------------------------------
+;; Gesso Live system component
+;; -----------------------------------------------------------------------------
+
+(defn gesso-live-rules
+  []
+  [{:when-topic :demo-counter
+    :expand (fn [_ctx change]
+              [{:topic (:topic change)
+                :id (:id change)
+                :change/kind (:change/kind change)}])}])
+
+(defn use-gesso-live
+  "Biff-style component that creates the app-wide Gesso Live system.
+
+   The resulting live system is attached to ctx as :gesso.live/system so route
+   handlers can use live/live-swap!, live/start-sse!, and other facade helpers
+   without each feature namespace creating its own local singleton."
+  [ctx]
+  (let [live-system (live/create
+                     {:rules (gesso-live-rules)
+                      :dispatch-options {:threads 1
+                                         :queue-size 64
+                                         :on-overflow :coalesce}
+                      :fragment-options {:ttl-ms 1000}})]
+    (log/info "Gesso Live system started.")
+    (-> ctx
+        (assoc :gesso.live/system live-system)
+        (update :biff/stop
+                (fnil conj [])
+                (fn stop-gesso-live []
+                  (log/info "Stopping Gesso Live system.")
+                  (live/close! live-system))))))
+
+;; -----------------------------------------------------------------------------
+;; Aleph HTTP server component
+;; -----------------------------------------------------------------------------
 
 (defn- parse-port
   [port]
@@ -130,6 +167,7 @@
    biff/use-queues
    biffx/use-xtdb2-listener
    biff/use-htmx-refresh
+   use-gesso-live
    use-aleph
    biff/use-chime
    biff/use-beholder])
