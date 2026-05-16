@@ -13,8 +13,7 @@
    [gesso.core :as gs :refer :all ]
    [gessotest.page-examples :refer :all]
    [gessotest.bars-demo :refer [bars-demo-page]]
-   [gesso.live.app :as live.app]
-   [gessotest.shared-counter :as shared-counter]
+   ;; [gesso.live.app :as live.app]
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.form-flow-demo.core :as form-flow-demo]
    [gessotest.toaster-demo :as toaster-demo]
@@ -905,7 +904,6 @@
     (section-blocks-section)
     (toolbars-section)
     (pages-section)
-    (shared-counter/section)
     (simple-shared-counter/section )
     (toaster-demo/section)
     (toaster-live-demo/section)
@@ -944,58 +942,6 @@
    [:.text-gray-600 (tick/format "dd MMM yyyy HH:mm:ss" sent-at)]
    [:div content]])
 
-(defn notify-clients [{:keys [gessotest/chat-clients]} record]
-  (when (= "msg" (:biff.xtdb/table record))
-    (let [html (rum/render-static-markup
-                [:div#messages {:hx-swap-oob "afterbegin"}
-                 (message record)])]
-      (doseq [ws @chat-clients]
-        (ws/send ws html)))))
-
-(defn send-message [{:keys [session] :as ctx} {:keys [text]}]
-  (let [{:keys [content]} (cheshire/parse-string text true)]
-    (biffx/submit-tx ctx
-                     [[:put-docs :msg {:xt/id (random-uuid)
-                                       :msg/user (:uid session)
-                                       :msg/content content
-                                       :msg/sent-at (tick/zoned-date-time)}]])))
-
-(defn chat [{:keys [biff/conn]}]
-  (let [messages (biffx/q conn
-                          {:select [:msg/content :msg/sent-at]
-                           :from :msg
-                           :where [:>= :msg/sent-at (tick/<< (tick/now)
-                                                             (tick/of-minutes 10))]})]
-    [:div {:hx-ext "ws" :ws-connect "/app/chat"}
-     [:form.mb-0 {:ws-send true
-                  :_ "on submit set value of #message to ''"}
-      [:label.block {:for "message"} "Write a message"]
-      [:.h-1]
-      [:textarea.w-full#message {:name "content"}]
-      [:.h-1]
-      [:.text-sm.text-gray-600
-       "Sign in with an incognito window to have a conversation with yourself."]
-      [:.h-2]
-      [:div [:button.btn {:type "submit"} "Send message"]]]
-     [:.h-6]
-     [:div#message-header
-      {:_ "on newMessage put 'Messages sent in the past 10 minutes:' into me"}
-      (if (empty? messages)
-        "No messages yet."
-        "Messages sent in the past 10 minutes:")]
-     [:div#messages
-      (map message (sort-by :msg/sent-at #(compare %2 %1) messages))]]))
-
-(defn ws-handler [{:keys [gessotest/chat-clients] :as ctx}]
-  {:status 101
-   :headers {"upgrade" "websocket"
-             "connection" "upgrade"}
-   ::ws/listener {:on-open (fn [ws]
-                             (swap! chat-clients conj ws))
-                  :on-message (fn [ws text-message]
-                                (send-message ctx {:ws ws :text text-message}))
-                  :on-close (fn [ws _status-code _reason]
-                              (swap! chat-clients disj ws))}})
 
 (def about-page
   (ui/page
@@ -1009,30 +955,10 @@
    :headers {"content-type" "application/json"}
    :body params})
 
-(def live-system
-  (live.app/simple-system
-   {:configs [shared-counter/live-config]}))
-
 (def module
   {:static {"/about/" about-page}
-   :routes [["/app" {:middleware [mid/wrap-signed-in
-                                  (:middleware live-system)]}
+   :routes [["/app" {:middleware [mid/wrap-signed-in]}
              ["" {:get app}]
-             ["/set-foo" {:post set-foo}]
-             ["/set-bar" {:post set-bar}]
-             ["/chat" {:get ws-handler}]
-             ["/gesso/live/stream" {:get (:sse-handler live-system)}]
-
-             ;; Original Counter
-             ["/demo/shared-counter/fragment" {:get shared-counter/fragment}]
-             ["/demo/shared-counter/increment" {:post shared-counter/increment!}]
-             ["/demo/shared-counter/decrement" {:post shared-counter/decrement!}]
-
-             ;; Simple Counter
-             ["/demo/simple-shared-counter/fragment" {:get simple-shared-counter/fragment}]
-             ["/demo/simple-shared-counter/increment" {:post simple-shared-counter/increment!}]
-             ["/demo/simple-shared-counter/decrement" {:post simple-shared-counter/decrement!}]
-
              ["/pages" {}
               ["/focused" {:get page-focused}]
               ["/bars-demo" {:get bars-demo-page}]
@@ -1042,5 +968,4 @@
               ["/three-column" {:get page-three-column}]
               ["/full" {:get page-full}]
               ["/custom-layout" {:get page-custom-layout}]]]]
-   :api-routes [["/api/echo" {:post echo}]]
-   :on-tx notify-clients})
+   :api-routes [["/api/echo" {:post echo}]]})

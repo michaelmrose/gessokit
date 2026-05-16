@@ -1,24 +1,27 @@
 (ns gessotest
-  (:require [com.biffweb :as biff]
-            [com.biffweb.experimental :as biffx]
-            [com.biffweb.experimental.auth :as biff-auth]
-            [gessotest.email :as email]
-            [gessotest.app :as app]
-            [gessotest.home :as home]
-            [gessotest.middleware :as mid]
-            [gessotest.ui :as ui]
-            [gessotest.worker :as worker]
-            [gessotest.schema :as schema]
-            [clojure.test :as test]
-            [clojure.tools.logging :as log]
-            [clojure.tools.namespace.repl :as tn-repl]
-            [malli.core :as malc]
-            [malli.registry :as malr]
-            [nrepl.cmdline :as nrepl-cmd]
-            [gessotest.form-flow-demo.core :as form-flow-demo]
-            [gessotest.toaster-demo :as toaster-demo]
-            [gessotest.client-plumbing :as client-plumbing]
-            )
+  (:require
+   [aleph.http :as aleph]
+   [clojure.test :as test]
+   [clojure.tools.logging :as log]
+   [clojure.tools.namespace.repl :as tn-repl]
+   [com.biffweb :as biff]
+   [com.biffweb.experimental :as biffx]
+   [com.biffweb.experimental.auth :as biff-auth]
+   [gessotest.app :as app]
+   [gessotest.email :as email]
+   [gessotest.form-flow-demo.core :as form-flow-demo]
+   [gessotest.home :as home]
+   [gessotest.middleware :as mid]
+   [gessotest.schema :as schema]
+   [gessotest.toaster-demo :as toaster-demo]
+   [gessotest.ui :as ui]
+   [gessotest.worker :as worker]
+   [malli.core :as malc]
+   [malli.registry :as malr]
+   [nrepl.cmdline :as nrepl-cmd]
+   [gessotest.client-plumbing :as client-plumbing]
+   [gessotest.simple-shared-counter :as simple-shared-counter]
+   )
   (:gen-class))
 
 (def modules
@@ -29,25 +32,31 @@
    worker/module
    form-flow-demo/module
    toaster-demo/module
+   simple-shared-counter/module
    client-plumbing/module
    ])
 
-(def routes [["" {:middleware [mid/wrap-site-defaults]}
-              (keep :routes modules)]
-             ["" {:middleware [mid/wrap-api-defaults]}
-              (keep :api-routes modules)]])
+(def routes
+  [["" {:middleware [mid/wrap-site-defaults]}
+    (keep :routes modules)]
+   ["" {:middleware [mid/wrap-api-defaults]}
+    (keep :api-routes modules)]])
 
-(def handler (-> (biff/reitit-handler {:routes routes})
-                 mid/wrap-base-defaults))
+(def handler
+  (-> (biff/reitit-handler {:routes routes})
+      mid/wrap-base-defaults))
 
-(def static-pages (apply biff/safe-merge (map :static modules)))
+(def static-pages
+  (apply biff/safe-merge (map :static modules)))
 
-(defn generate-assets! [_ctx]
+(defn generate-assets!
+  [_ctx]
   (biff/export-rum static-pages "target/resources/public")
   (biff/delete-old-files {:dir "target/resources/public"
                           :exts [".html"]}))
 
-(defn on-save [ctx]
+(defn on-save
+  [ctx]
   (biff/add-libs ctx)
   (biff/eval-files! ctx)
   (generate-assets! ctx)
@@ -65,10 +74,55 @@
    :biff/malli-opts #'malli-opts
    :biff.beholder/on-save #'on-save
    :biff.middleware/on-error #'ui/on-error
-   :biff.xtdb.listener/tables ["user" "msg"]
-   :gessotest/chat-clients (atom #{})})
+   :biff.xtdb.listener/tables ["user" "msg"]})
 
-(defonce system (atom {}))
+(defonce system
+  (atom {}))
+
+(defn- parse-port
+  [port]
+  (cond
+    (integer? port)
+    port
+
+    (string? port)
+    (Long/parseLong port)
+
+    :else
+    (long port)))
+
+(defn use-aleph
+  "Temporary Biff-style component that starts an Aleph/Netty HTTP server.
+
+   This replaces biff/use-jetty in this app's component list.
+
+   Each Ring request is merged with the current system ctx before being passed
+   to :biff/handler, matching the important app-facing behavior expected by
+   ordinary Biff handlers."
+  [{:biff/keys [host port handler]
+    :or {host "0.0.0.0"
+         port 8080}
+    :as ctx}]
+  (when-not handler
+    (throw
+     (ex-info "Cannot start Aleph server without :biff/handler."
+              {:ctx-keys (set (keys ctx))})))
+  (let [port'   (parse-port port)
+        handler' (fn [request]
+                   (handler (merge ctx request)))
+        server  (aleph/start-server
+                 handler'
+                 {:host host
+                  :port port'})]
+    (log/info "ALEPH SERVER STARTED" {:host host
+                                      :port port'
+                                      :server server})
+    (update ctx :biff/stop
+            (fnil conj [])
+            (fn stop-aleph []
+              (log/info "STOPPING ALEPH SERVER" {:host host
+                                                 :port port'})
+              (.close server)))))
 
 (def components
   [biff/use-aero-config
@@ -76,11 +130,12 @@
    biff/use-queues
    biffx/use-xtdb2-listener
    biff/use-htmx-refresh
-   biff/use-jetty
+   use-aleph
    biff/use-chime
    biff/use-beholder])
 
-(defn start []
+(defn start
+  []
   (let [new-system (reduce (fn [system component]
                              (log/info "starting:" (str component))
                              (component system))
@@ -92,12 +147,14 @@
     (log/info "Go to" (:biff/base-url new-system))
     new-system))
 
-(defn -main []
+(defn -main
+  []
   (java.util.TimeZone/setDefault (java.util.TimeZone/getTimeZone "UTC"))
   (let [{:keys [biff.nrepl/args]} (start)]
     (apply nrepl-cmd/-main args)))
 
-(defn refresh []
+(defn refresh
+  []
   (doseq [f (:biff/stop @system)]
     (log/info "stopping:" (str f))
     (f))

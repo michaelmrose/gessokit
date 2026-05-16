@@ -9,10 +9,10 @@
    - response wrapping
    - app-friendly send helpers
 
-   Generic connected-client delivery mechanics live in gesso.live.oob."
+   Generic connected-client delivery mechanics live in gesso.live.client."
   (:require
    [gesso.core :as g]
-   [gesso.live.oob :as live-oob]
+   [gesso.live.client :as live-client]
    [gessotest.middleware :as mid]))
 
 ;; -----------------------------------------------------------------------------
@@ -58,7 +58,7 @@
 ;; -----------------------------------------------------------------------------
 
 (defonce channel
-  (live-oob/channel
+  (live-client/channel
    {:id :gessotest/client-oob
     :event "client-oob"
     :endpoint endpoint
@@ -66,7 +66,7 @@
 
 (defn reset-plumbing!
   []
-  (live-oob/reset-channel! channel))
+  (live-client/reset-channel! channel))
 
 ;; -----------------------------------------------------------------------------
 ;; Browser listener
@@ -74,14 +74,14 @@
 
 (defn new-client-id
   []
-  (live-oob/new-client-id))
+  (live-client/new-client-id))
 
 (defn listener
   "Render the browser-side listener for one connected client."
   ([ctx]
-   (live-oob/listener channel ctx))
+   (live-client/listener channel ctx))
   ([ctx client-id]
-   (live-oob/listener
+   (live-client/listener
     channel
     ctx
     {:client/id client-id
@@ -94,11 +94,11 @@
 
 (defn stream
   [ctx]
-  (live-oob/stream-response channel ctx))
+  (live-client/stream-response channel ctx))
 
 (defn pending
   [ctx]
-  (if-let [fragment (live-oob/drain-fragment! channel ctx)]
+  (if-let [fragment (live-client/drain-fragment! channel ctx)]
     (g/html-response fragment)
     (g/no-content)))
 
@@ -119,7 +119,7 @@
      (g/oob-inner-html \"notification-count\" \"3\")
      (g/render-toast-oob toast)"
   [to & fragments]
-  (live-oob/send!
+  (live-client/send!
    channel
    {:to to
     :fragments fragments}))
@@ -127,24 +127,24 @@
 (defn send-to-client!
   "Send arbitrary OOB fragments to one connected browser client."
   [client-id & fragments]
-  (apply live-oob/send-to-client! channel client-id fragments))
+  (apply live-client/send-to-client! channel client-id fragments))
 
 (defn send-to-user!
   "Send arbitrary OOB fragments to every connected browser client for user-id."
   [user-id & fragments]
-  (apply live-oob/send-to-user! channel (str user-id) fragments))
+  (apply live-client/send-to-user! channel (str user-id) fragments))
 
 (defn send-to-scope!
   "Send arbitrary OOB fragments to every connected browser client in scope."
   [scope & fragments]
-  (apply live-oob/send-to-scope! channel scope fragments))
+  (apply live-client/send-to-scope! channel scope fragments))
 
 (defn broadcast!
   "Send arbitrary OOB fragments to every connected browser client.
 
    This should be explicit and rare."
   [& fragments]
-  (apply live-oob/broadcast! channel fragments))
+  (apply live-client/broadcast! channel fragments))
 
 ;; -----------------------------------------------------------------------------
 ;; Introspection
@@ -152,23 +152,23 @@
 
 (defn connected-clients
   []
-  (live-oob/connected-clients channel))
+  (live-client/connected-clients channel))
 
 (defn connected-client-ids
   []
-  (live-oob/connected-client-ids channel))
+  (live-client/connected-client-ids channel))
 
 (defn latest-client-id
   []
-  (live-oob/latest-client-id channel))
+  (live-client/latest-client-id channel))
 
 (defn pending-counts
   []
-  (live-oob/pending-counts channel))
+  (live-client/pending-counts channel))
 
 (defn state-summary
   []
-  (live-oob/state-summary channel))
+  (live-client/state-summary channel))
 
 ;; -----------------------------------------------------------------------------
 ;; Biff module
