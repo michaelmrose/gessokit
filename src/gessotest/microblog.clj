@@ -15,6 +15,7 @@
    Aleph/SSE/HTMX behavior before adding XTDB pressure."
   (:require
    [clojure.string :as str]
+   [gesso.core :as g]
    [gesso.live.core :as live]
    [gessotest.middleware :as mid]))
 
@@ -847,6 +848,68 @@
 
 
 ;; -----------------------------------------------------------------------------
+;; Dev/load-test helpers
+;; -----------------------------------------------------------------------------
+
+(defn load-param
+  [ctx k]
+  (or (get-in ctx [:params k])
+      (get-in ctx [:params (name k)])
+      (get-in ctx [:query-params k])
+      (get-in ctx [:query-params (name k)])
+      (get-in ctx [:form-params k])
+      (get-in ctx [:form-params (name k)])))
+
+(defn load-user-id
+  [ctx]
+  (or (load-param ctx :user-id)
+      (get-in ctx [:headers "x-load-user"])
+      "load-user-0"))
+
+(defn load-mode
+  [ctx]
+  (keyword
+   (or (load-param ctx :mode)
+       (get-in ctx [:headers "x-load-mode"])
+       "high")))
+
+(defn with-load-user
+  "Adapt a dev/load request into the shape expected by ordinary microblog
+   handlers.
+
+   The dev token only authorizes the load tool. The simulated user identity
+   comes from user-id / X-Load-User."
+  [ctx]
+  (let [user-id (str (load-user-id ctx))
+        mode    (load-mode ctx)]
+    (-> ctx
+        (assoc :gessotest.load/user-id user-id
+               :gessotest.load/mode mode
+               :uid user-id
+               :user/id user-id)
+        (assoc-in [:session :uid] user-id))))
+
+(defn load-stream
+  [ctx]
+  (stream (with-load-user ctx)))
+
+
+(defn load-global-feed-fragment
+  [ctx]
+  (g/html-response
+   (global-feed-fragment (with-load-user ctx))))
+
+(defn load-timeline-fragment
+  [ctx]
+  (g/html-response
+   (timeline-fragment (with-load-user ctx))))
+
+
+(defn load-create-tweet!
+  [ctx]
+  (create-tweet! (with-load-user ctx)))
+
+;; -----------------------------------------------------------------------------
 ;; Routes
 ;; -----------------------------------------------------------------------------
 
@@ -917,7 +980,21 @@
     {:post burst-likes!}]
 
    ["/api/microblog/dev/burst-comments"
-    {:post burst-comments!}]])
+    {:post burst-comments!}]
+
+   ;; Protected globally by mid/wrap-dev-load-token in gessotest.clj.
+   ;; These do not use wrap-signed-in; they simulate many users via user-id.
+   ["/api/microblog/dev/load/stream"
+    {:get load-stream}]
+
+   ["/api/microblog/dev/load/fragments/global"
+    {:get load-global-feed-fragment}]
+
+   ["/api/microblog/dev/load/fragments/timeline"
+    {:get load-timeline-fragment}]
+
+   ["/api/microblog/dev/load/tweet"
+    {:post load-create-tweet!}]])
 
 (def module
   {:live-rules (live-rules)

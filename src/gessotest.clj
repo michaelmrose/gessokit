@@ -14,10 +14,10 @@
    [gessotest.form-flow-demo.core :as form-flow-demo]
    [gessotest.home :as home]
    [gessotest.middleware :as mid]
+   [gessotest.microblog :as microblog]
    [gessotest.schema :as schema]
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.toaster-demo :as toaster-demo]
-   [gessotest.microblog :as microblog]
    [gessotest.ui :as ui]
    [gessotest.worker :as worker]
    [malli.core :as malc]
@@ -35,13 +35,13 @@
    toaster-demo/module
    simple-shared-counter/module
    client-plumbing/module
-   microblog/module
-   ])
+   microblog/module])
 
 (def routes
   [["" {:middleware [mid/wrap-site-defaults]}
     (keep :routes modules)]
-   ["" {:middleware [mid/wrap-api-defaults]}
+   ["" {:middleware [mid/wrap-api-defaults
+                     mid/wrap-dev-load-token]}
     (keep :api-routes modules)]])
 
 (def handler
@@ -76,7 +76,8 @@
    :biff/malli-opts #'malli-opts
    :biff.beholder/on-save #'on-save
    :biff.middleware/on-error #'ui/on-error
-   :biff.xtdb.listener/tables ["user" "msg"]})
+   :biff.xtdb.listener/tables ["user" "msg"]
+   :gessotest.load/dev-token (System/getenv "GESSOTEST_LOAD_TOKEN")})
 
 (defonce system
   (atom {}))
@@ -100,8 +101,8 @@
   "Biff-style component that creates the app-wide Gesso Live system.
 
    The resulting live system is attached to ctx as :gesso.live/system so route
-   handlers can use live/live-swap!, live/start-sse!, and other facade helpers
-   without each feature namespace creating its own local singleton."
+   handlers can use the gesso.live.core facade without each feature namespace
+   creating its own local singleton."
   [ctx]
   (let [live-system (live/create
                      {:rules (gesso-live-rules)
@@ -150,13 +151,13 @@
     (throw
      (ex-info "Cannot start Aleph server without :biff/handler."
               {:ctx-keys (set (keys ctx))})))
-  (let [port'   (parse-port port)
+  (let [port'    (parse-port port)
         handler' (fn [request]
                    (handler (merge ctx request)))
-        server  (aleph/start-server
-                 handler'
-                 {:host host
-                  :port port'})]
+        server   (aleph/start-server
+                  handler'
+                  {:host host
+                   :port port'})]
     (log/info "ALEPH SERVER STARTED" {:host host
                                       :port port'
                                       :server server})
@@ -189,6 +190,8 @@
     (generate-assets! new-system)
     (log/info "System started.")
     (log/info "Go to" (:biff/base-url new-system))
+    (when-not (:gessotest.load/dev-token new-system)
+      (log/warn "GESSOTEST_LOAD_TOKEN is not set; /api/microblog/dev/load routes will reject requests."))
     new-system))
 
 (defn -main
