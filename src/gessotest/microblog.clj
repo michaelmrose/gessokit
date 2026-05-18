@@ -17,7 +17,8 @@
    [clojure.string :as str]
    [gesso.core :as g]
    [gesso.live.core :as live]
-   [gessotest.middleware :as mid]))
+   [gessotest.middleware :as mid]
+   [gessotest.ui :as ui]))
 
 ;; -----------------------------------------------------------------------------
 ;; Constants
@@ -398,7 +399,7 @@
                    :id "global"}}))
 
 ;; -----------------------------------------------------------------------------
-;; Rendering
+;; Rendering (Hiccup Views)
 ;; -----------------------------------------------------------------------------
 
 (defn button-class
@@ -554,37 +555,39 @@
   [ctx]
   (ensure-seeded!)
   (let [user-id (current-user-id ctx)]
-    [:section {:class "mx-auto max-w-5xl py-8 space-y-6"}
-     [:div {:class "space-y-2"}
-      [:h1 {:class "font-heading text-3xl font-bold"}
-       "Microblog Live Load Demo"]
-      [:p {:class "text-muted-foreground"}
-       "Fake Twitter-shaped workload for fanout, hot objects, slow clients, and reconnect behavior."]
-      [:p {:class "text-sm text-muted-foreground"}
-       "Current synthetic user: "
-       [:code user-id]]]
+    (ui/page-shell ctx
+      [:section {:class "mx-auto max-w-5xl py-8 space-y-6"}
+       [:div {:class "space-y-2"}
+        [:h1 {:class "font-heading text-3xl font-bold"}
+         "Microblog Live Load Demo"]
+        [:p {:class "text-muted-foreground"}
+         "Fake Twitter-shaped workload for fanout, hot objects, slow clients, and reconnect behavior."]
+        [:p {:class "text-sm text-muted-foreground"}
+         "Current synthetic user: "
+         [:code user-id]]]
 
-     (compose-form ctx)
+       (compose-form ctx)
 
-     [:div {:class "grid gap-4 lg:grid-cols-[1fr_1fr]"}
-      [:div {:class "space-y-4"}
-       (live/fragment-panel (global-feed-descriptor))]
-      [:div {:class "space-y-4"}
-       (live/fragment-panel (timeline-descriptor user-id))
-       (live/fragment-panel (stats-descriptor))]]]))
+       [:div {:class "grid gap-4 lg:grid-cols-[1fr_1fr]"}
+        [:div {:class "space-y-4"}
+         (live/fragment-panel (global-feed-descriptor))]
+        [:div {:class "space-y-4"}
+         (live/fragment-panel (timeline-descriptor user-id))
+         (live/fragment-panel (stats-descriptor))]]])))
 
 (defn tweet-page
   [ctx]
   (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)]
-    [:section {:class "mx-auto max-w-3xl py-8 space-y-6"}
-     [:a {:href base-path
-          :class "text-sm underline"}
-      "← Microblog"]
-     (live/fragment-panel (tweet-descriptor tweet-id))]))
+    (ui/page-shell ctx
+      [:section {:class "mx-auto max-w-3xl py-8 space-y-6"}
+       [:a {:href base-path
+            :class "text-sm underline"}
+        "← Microblog"]
+       (live/fragment-panel (tweet-descriptor tweet-id))])))
 
 ;; -----------------------------------------------------------------------------
-;; Mutations
+;; Mutations (Route Handlers)
 ;; -----------------------------------------------------------------------------
 
 (defn create-tweet!
@@ -612,7 +615,7 @@
       :tweet-id id
       :author-id author-id
       :change/kind :created})
-    (global-feed-fragment ctx)))
+    (g/html-response (global-feed-fragment ctx))))
 
 (defn like!
   [ctx]
@@ -636,7 +639,7 @@
       :author-id author-id
       :user-id user-id
       :change/kind :updated})
-    (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id))))
+    (g/html-response (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id)))))
 
 (defn share!
   [ctx]
@@ -663,7 +666,7 @@
       :author-id author-id
       :user-id user-id
       :change/kind :updated})
-    (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id))))
+    (g/html-response (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id)))))
 
 (defn comment!
   [ctx]
@@ -694,11 +697,22 @@
       :author-id author-id
       :user-id user-id
       :change/kind :updated})
-    (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id))))
+    (g/html-response (tweet-fragment (assoc-in ctx [:params :tweet-id] tweet-id)))))
+
 
 ;; -----------------------------------------------------------------------------
-;; SSE / fragments
+;; SSE / fragments (Route Handlers with Caching & Singleflight)
 ;; -----------------------------------------------------------------------------
+
+(defn run-task-sync
+  "Block the current Ring thread until the Missionary task completes."
+  [task]
+  (let [p (promise)
+        _cancel! (task #(deliver p [:ok %]) #(deliver p [:error %]))
+        [status val] @p]
+    (if (= status :ok)
+      val
+      (throw val))))
 
 (defn stream
   [ctx]
@@ -711,6 +725,46 @@
       {:topic topic
        :id id}
       {:flow-options {:relieve? true}}))))
+
+(defn global-feed-route [ctx]
+  (run-task-sync
+   (live/render-task
+    (live-system ctx)
+    (live/fragment-key "global-feed"
+                       {:consistency-token (:gesso.live/consistency ctx)})
+    #(g/html-response (global-feed-fragment ctx))
+    {:ttl-ms 500})))
+
+(defn timeline-route [ctx]
+  (let [user-id (current-user-id ctx)]
+    (run-task-sync
+     (live/render-task
+      (live-system ctx)
+      (live/fragment-key "timeline"
+                         {:user-key user-id
+                          :consistency-token (:gesso.live/consistency ctx)})
+      #(g/html-response (timeline-fragment ctx))
+      {:ttl-ms 500}))))
+
+(defn tweet-route [ctx]
+  (let [tweet-id (param ctx :tweet-id)]
+    (run-task-sync
+     (live/render-task
+      (live-system ctx)
+      (live/fragment-key "tweet"
+                         {:user-key tweet-id
+                          :consistency-token (:gesso.live/consistency ctx)})
+      #(g/html-response (tweet-fragment ctx))
+      {:ttl-ms 500}))))
+
+(defn stats-route [ctx]
+  (run-task-sync
+   (live/render-task
+    (live-system ctx)
+    (live/fragment-key "stats"
+                       {:consistency-token (:gesso.live/consistency ctx)})
+    #(g/html-response (stats-fragment ctx))
+    {:ttl-ms 500})))
 
 ;; -----------------------------------------------------------------------------
 ;; Dev/load routes
@@ -842,12 +896,6 @@
     (dev-stats ctx)))
 
 ;; -----------------------------------------------------------------------------
-;; Module
-;; -----------------------------------------------------------------------------
-
-
-
-;; -----------------------------------------------------------------------------
 ;; Dev/load-test helpers
 ;; -----------------------------------------------------------------------------
 
@@ -893,17 +941,14 @@
   [ctx]
   (stream (with-load-user ctx)))
 
-
+;; Delegate directly to the singleflight-protected handlers
 (defn load-global-feed-fragment
   [ctx]
-  (g/html-response
-   (global-feed-fragment (with-load-user ctx))))
+  (global-feed-route (with-load-user ctx)))
 
 (defn load-timeline-fragment
   [ctx]
-  (g/html-response
-   (timeline-fragment (with-load-user ctx))))
-
+  (timeline-route (with-load-user ctx)))
 
 (defn load-create-tweet!
   [ctx]
@@ -932,19 +977,19 @@
 
    ["/app/microblog/fragments/global"
     (signed-in-route
-     {:get global-feed-fragment})]
+     {:get global-feed-route})]
 
    ["/app/microblog/fragments/timeline"
     (signed-in-route
-     {:get timeline-fragment})]
+     {:get timeline-route})]
 
    ["/app/microblog/fragments/tweet"
     (signed-in-route
-     {:get tweet-fragment})]
+     {:get tweet-route})]
 
    ["/app/microblog/fragments/stats"
     (signed-in-route
-     {:get stats-fragment})]
+     {:get stats-route})]
 
    ["/app/microblog/tweet"
     (signed-in-route
