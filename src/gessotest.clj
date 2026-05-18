@@ -1,4 +1,4 @@
-(ns gessotest
+/(ns gessotest
   (:require
    [aleph.http :as aleph]
    [clojure.test :as test]
@@ -135,7 +135,59 @@
     :else
     (long port)))
 
+;; Cleanly shut down our custom pool
+
+
 (defn use-aleph
+  "Temporary Biff-style component that starts an Aleph/Netty HTTP server.
+
+   This replaces biff/use-jetty in this app's component list.
+
+   Each Ring request is merged with the current system ctx before being passed
+   to :biff/handler, matching the important app-facing behavior expected by
+   ordinary Biff handlers."
+  [{:biff/keys [host port handler]
+    :or {host "0.0.0.0"
+         port 8080}
+    :as ctx}]
+  (when-not handler
+    (throw
+     (ex-info "Cannot start Aleph server without :biff/handler."
+              {:ctx-keys (set (keys ctx))})))
+  (let [port'    (parse-port port)
+        handler' (fn [request]
+                   (handler (merge ctx request)))
+
+        ;; 1. Use Netty's built-in factory to handle thread naming and daemon status
+        thread-factory (io.netty.util.concurrent.DefaultThreadFactory. "aleph-worker" true)
+
+        ;; 2. Rock-solid standard JVM thread pool.
+        worker-pool (java.util.concurrent.ThreadPoolExecutor.
+                     200  ;; core pool size
+                     200  ;; maximum pool size
+                     60   ;; keep-alive time
+                     java.util.concurrent.TimeUnit/SECONDS
+                     (java.util.concurrent.LinkedBlockingQueue. 50000) ;; The massive queue
+                     thread-factory)
+
+        server   (aleph/start-server
+                  handler'
+                  {:host host
+                   :port port'
+                   ;; Tell Aleph to use our custom massive queue
+                   :executor worker-pool})]
+    (log/info "ALEPH SERVER STARTED" {:host host
+                                      :port port'
+                                      :server server})
+    (update ctx :biff/stop
+            (fnil conj [])
+            (fn stop-aleph []
+              (log/info "STOPPING ALEPH SERVER" {:host host
+                                                 :port port'})
+              (.close server)
+              (.shutdown worker-pool)))))
+
+#_(defn use-aleph
   "Temporary Biff-style component that starts an Aleph/Netty HTTP server.
 
    This replaces biff/use-jetty in this app's component list.
