@@ -1,19 +1,19 @@
 (ns gessotest.microblog
   "Fake micro-Twitter workload for Gesso Live.
 
-   This load test exercises the entire stack:
-   HTMX -> SSE -> Gesso Live (Missionary/Manifold) -> XTDB v2.
+   This is intentionally not a real product feature. It is an app-shaped load
+   test/demo for:
 
-   It tests:
-   - High fanout vs Low fanout
-   - XTDB read-after-write consistency (via transact-and-notify!)
-   - Database protection (via singleflight caching)
-   - Bursty write traffic and concurrent reads"
+   - many long-lived SSE clients
+   - low fanout vs high fanout
+   - hot object updates
+   - fragment refresh pressure
+   - slow/reconnecting clients
+   - bursty write traffic"
   (:require
    [clojure.string :as str]
    [gesso.core :as g]
    [gesso.live.core :as live]
-   [gesso.live.consistency.xtdb :as live.xtdb]
    [gessotest.middleware :as mid]
    [gessotest.ui :as ui]))
 
@@ -27,61 +27,76 @@
 (def default-seed-tweet-count 200)
 (def max-rendered-tweets 50)
 
+;; -----------------------------------------------------------------------------
+;; O(1) Denormalized State
+;; -----------------------------------------------------------------------------
+
+(defonce !state
+  (atom {:next-id 0
+         :users {}
+         :tweets {}
+         :likes {}         ;; tweet-id -> count
+         :shares {}        ;; tweet-id -> count
+         :comments {}      ;; tweet-id -> [comments]
+         :follows {}       ;; user-id -> set of following
+         :followers {}     ;; user-id -> set of followers
+         :global-feed ()   ;; list of tweet-ids (max 50)
+         :timelines {}     ;; user-id -> list of tweet-ids (max 50)
+         :profile-feeds {} ;; user-id -> list of tweet-ids (max 50)
+         :created-at (System/currentTimeMillis)}))
+
 (defn now-ms [] (System/currentTimeMillis))
 
-(defn random-id [prefix]
-  (str prefix "-" (random-uuid)))
+(defn reset-state! []
+  (reset! !state
+          {:next-id 0
+           :users {}
+           :tweets {}
+           :likes {}
+           :shares {}
+           :comments {}
+           :follows {}
+           :followers {}
+           :global-feed ()
+           :timelines {}
+           :profile-feeds {}
+           :created-at (now-ms)})
+  :reset)
 
-;; -----------------------------------------------------------------------------
-;; XTDB Queries (The Read Model)
-;; -----------------------------------------------------------------------------
-;; Note: XTDB2 maps Clojure keys like :author-id to SQL columns like author_id
+(defn next-id! [prefix]
+  (let [n (:next-id (swap! !state update :next-id inc))]
+    (str prefix "-" n)))
 
-(defn global-feed-tweets [ctx]
-  (live.xtdb/q-consistent-from ctx
-   "SELECT _id, tweet_id, body, author_id, created_at, like_count, share_count, comment_count
-    FROM microblog_tweets
-    ORDER BY created_at DESC
-    LIMIT ?"
-   [max-rendered-tweets]))
+(defn make-user [n]
+  (let [id (str "user-" n)]
+    {:xt/id id :user/id id :user/name (str "User " n) :user/handle (str "user" n)}))
 
-(defn timeline-tweets [ctx user-id]
-  (live.xtdb/q-consistent-from ctx
-   "SELECT t._id, t.tweet_id, t.body, t.author_id, t.created_at, t.like_count, t.share_count, t.comment_count
-    FROM microblog_tweets t
-    WHERE t.author_id = ?
-       OR t.author_id IN (SELECT f.followed_id FROM microblog_follows f WHERE f.follower_id = ?)
-    ORDER BY t.created_at DESC
-    LIMIT ?"
-   [user-id user-id max-rendered-tweets]))
+(defn user [user-id]
+  (get-in @!state [:users user-id]
+          {:xt/id user-id :user/id user-id :user/name user-id :user/handle user-id}))
 
-(defn tweet [ctx tweet-id]
-  (first
-   (live.xtdb/q-consistent-from ctx
-    "SELECT _id, tweet_id, body, author_id, created_at, like_count, share_count, comment_count
-     FROM microblog_tweets
-     WHERE _id = ?"
-    [tweet-id])))
+(defn tweet [tweet-id] (get-in @!state [:tweets tweet-id]))
 
-(defn comments-for [ctx tweet-id]
-  (live.xtdb/q-consistent-from ctx
-   "SELECT _id, comment_id, author_id, body, created_at
-    FROM microblog_comments
-    WHERE tweet_id = ?
-    ORDER BY created_at ASC"
-   [tweet-id]))
+;; O(1) Fast Reads
+(defn comments-for [tweet-id] (get-in @!state [:comments tweet-id] []))
+(defn like-count [tweet-id] (get-in @!state [:likes tweet-id] 0))
+(defn share-count [tweet-id] (get-in @!state [:shares tweet-id] 0))
+(defn comment-count [tweet-id] (count (comments-for tweet-id)))
 
-(defn follower-ids [ctx author-id]
-  (->> (live.xtdb/q-consistent-from ctx
-        "SELECT follower_id FROM microblog_follows WHERE followed_id = ?"
-        [author-id])
-       (map :follower_id)
-       set))
+(defn hydrate-tweets [tweet-ids]
+  (let [state @!state]
+    (keep #(get-in state [:tweets %]) tweet-ids)))
+
+(defn global-feed-tweets [] (hydrate-tweets (:global-feed @!state)))
+(defn timeline-tweets [user-id] (hydrate-tweets (get-in @!state [:timelines user-id] ())))
+(defn profile-tweets [user-id] (hydrate-tweets (get-in @!state [:profile-feeds user-id] ())))
+
+(defn- push-feed [feed tweet-id]
+  (take max-rendered-tweets (conj (or feed ()) tweet-id)))
 
 ;; -----------------------------------------------------------------------------
 ;; Request helpers
 ;; -----------------------------------------------------------------------------
-
 
 (defn param [ctx k]
   (or (get-in ctx [:params k]) (get-in ctx [:params (name k)])
@@ -100,76 +115,71 @@
   (or (:gesso.live/system ctx)
       (throw (ex-info "microblog requires :gesso.live/system in ctx." {}))))
 
-(defn submit-change!
-  [ctx change]
+(defn submit-change! [ctx change]
   (live/submit-expanded!
-   (live-system ctx)
-   ctx
-   change
-   {:coalesce-key [(:topic change)
-                   (or (:id change)
-                       (:tweet-id change)
-                       (:author-id change)
-                       (:user-id change))]}))
+   (live-system ctx) ctx change
+   {:coalesce-key [(:topic change) (or (:id change) (:tweet-id change) (:author-id change) (:user-id change))]}))
+
 ;; -----------------------------------------------------------------------------
-;; Seed data (XTDB Writes)
+;; Seed data
 ;; -----------------------------------------------------------------------------
 
 (declare state-summary)
 
 (defn seed!
-  [ctx {:keys [user-count following-count tweet-count]
-        :or {user-count default-user-count following-count default-following-count tweet-count default-seed-tweet-count}}]
+  [{:keys [user-count following-count tweet-count]
+    :or {user-count default-user-count following-count default-following-count tweet-count default-seed-tweet-count}}]
+  (reset-state!)
+  (let [users' (mapv make-user (range 1 (inc user-count)))
+        user-ids (mapv :user/id users')]
+    (swap! !state assoc :users (into {} (map (juxt :user/id identity)) users'))
 
-  ;; 1. Generate Users
-  (let [users (mapv (fn [n]
-                      (let [id (str "user-" n)]
-                        {:xt/id id :user_id id :handle (str "user" n)}))
-                    (range 1 (inc user-count)))
-        user-ids (mapv :user_id users)
+    ;; Build follows
+    (let [follow-pairs (for [idx (range user-count)
+                             offset (range 1 (inc following-count))
+                             :let [follower (nth user-ids idx)
+                                   followed (nth user-ids (mod (+ idx offset) user-count))]
+                             :when (not= follower followed)]
+                         [follower followed])]
+      (swap! !state
+             (fn [s]
+               (reduce (fn [acc [follower followed]]
+                         (-> acc
+                             (update-in [:follows follower] (fnil conj #{}) followed)
+                             (update-in [:followers followed] (fnil conj #{}) follower)))
+                       s follow-pairs))))
 
-        ;; 2. Generate Follows
-        follows (for [idx (range user-count)
-                      offset (range 1 (inc following-count))
-                      :let [follower (nth user-ids idx)
-                            followed (nth user-ids (mod (+ idx offset) user-count))]
-                      :when (not= follower followed)]
-                  {:xt/id (random-id "follow") :follower_id follower :followed_id followed})
+    ;; Seed tweets
+    (doseq [n (range tweet-count)]
+      (let [author-id (nth user-ids (mod n user-count))
+            id (next-id! "tweet")
+            t {:xt/id id :tweet/id id
+               :tweet/body (str "Seed tweet " n " from @" (:user/handle (user author-id)))
+               :tweet/author-id author-id
+               :tweet/created-at (+ (now-ms) n)}]
+        (swap! !state
+               (fn [s]
+                 (let [followers (get-in s [:followers author-id] #{})]
+                   (-> s
+                       (assoc-in [:tweets id] t)
+                       (update :global-feed push-feed id)
+                       (update-in [:profile-feeds author-id] push-feed id)
+                       (update-in [:timelines author-id] push-feed id) ; see own tweets
+                       (as-> s2 (reduce (fn [acc follower-id]
+                                          (update-in acc [:timelines follower-id] push-feed id))
+                                        s2 followers)))))))))
+  {:status :seeded :stats (select-keys (state-summary) [:user-count :tweet-count :follow-count])})
 
-        ;; 3. Generate Tweets
-        tweets (mapv (fn [n]
-                       (let [author-id (nth user-ids (mod n user-count))
-                             id (str "tweet-" n)]
-                         {:xt/id id :tweet_id id
-                          :body (str "Seed tweet " n " from @" author-id)
-                          :author_id author-id :created_at (+ (now-ms) n)
-                          :like_count 0 :share_count 0 :comment_count 0}))
-                     (range tweet-count))]
-
-    ;; Execute the massive seed transaction
-    (live.xtdb/execute-tx-from! ctx
-     (concat
-      [[:delete-docs :microblog_users]  ;; Optional: wipe old state if re-seeding
-       [:delete-docs :microblog_follows]
-       [:delete-docs :microblog_tweets]
-       [:delete-docs :microblog_comments]]
-      (mapv #(into [:put-docs :microblog_users] [%]) users)
-      (mapv #(into [:put-docs :microblog_follows] [%]) follows)
-      (mapv #(into [:put-docs :microblog_tweets] [%]) tweets))))
-
-  {:status :seeded :stats (state-summary ctx)})
-
-(defn ensure-seeded! [ctx]
-  (let [count-res (live.xtdb/q-consistent-from ctx "SELECT COUNT(*) as c FROM microblog_users")]
-    (when (or (empty? count-res) (zero? (:c (first count-res))))
-      (seed! ctx {}))))
+(defn ensure-seeded! []
+  (when (empty? (:users @!state)) (seed! {}))
+  @!state)
 
 ;; -----------------------------------------------------------------------------
 ;; Live rules
 ;; -----------------------------------------------------------------------------
 
-(defn tweet-created-invalidations [ctx {:keys [tweet-id author-id]}]
-  (let [followers (follower-ids ctx author-id)]
+(defn tweet-created-invalidations [{:keys [tweet-id author-id]}]
+  (let [followers (get-in @!state [:followers author-id] #{})]
     (vec
      (concat
       [{:topic :microblog/global-feed :id "global" :change/kind :updated}
@@ -178,7 +188,7 @@
       (for [follower-id followers]
         {:topic :microblog/timeline :id follower-id :change/kind :updated})))))
 
-(defn tweet-hot-object-invalidations [ctx {:keys [tweet-id author-id user-id]}]
+(defn tweet-hot-object-invalidations [{:keys [tweet-id author-id user-id]}]
   (vec
    (remove nil?
            [{:topic :microblog/tweet :id tweet-id :change/kind :updated}
@@ -186,13 +196,13 @@
             (when user-id {:topic :microblog/profile :id user-id :change/kind :updated})])))
 
 (defn live-rules []
-  [{:when-topic :microblog/tweet-created :expand (fn [ctx change] (tweet-created-invalidations ctx change))}
-   {:when-topic :microblog/tweet-liked :expand (fn [ctx change] (tweet-hot-object-invalidations ctx change))}
-   {:when-topic :microblog/tweet-commented :expand (fn [ctx change] (tweet-hot-object-invalidations ctx change))}
+  [{:when-topic :microblog/tweet-created :expand (fn [_ change] (tweet-created-invalidations change))}
+   {:when-topic :microblog/tweet-liked :expand (fn [_ change] (tweet-hot-object-invalidations change))}
+   {:when-topic :microblog/tweet-commented :expand (fn [_ change] (tweet-hot-object-invalidations change))}
    {:when-topic :microblog/tweet-shared
-    :expand (fn [ctx change]
-              (let [followers (follower-ids ctx (:user-id change))]
-                (vec (concat (tweet-hot-object-invalidations ctx change)
+    :expand (fn [_ change]
+              (let [followers (get-in @!state [:followers (:user-id change)] #{})]
+                (vec (concat (tweet-hot-object-invalidations change)
                              (for [follower-id followers]
                                {:topic :microblog/timeline :id follower-id :change/kind :updated})))))}])
 
@@ -237,44 +247,48 @@
 (defn button-class [] "inline-flex items-center justify-center rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted")
 (defn text-input-class [] "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm")
 
+(defn user-label [user-id]
+  (let [{:user/keys [name handle]} (user user-id)]
+    (str name " @" handle)))
+
 (defn tweet-card [ctx t]
-  (let [tweet-id (:tweet_id t) author-id (:author_id t)]
+  (let [tweet-id (:tweet/id t) author-id (:tweet/author-id t)]
     [:article {:id (str "tweet-card-" tweet-id) :class "rounded-xl border border-border bg-card p-4 shadow-sm space-y-3"}
      [:div {:class "flex items-start justify-between gap-4"}
-      [:div [:div {:class "font-heading font-semibold"} (str "@" author-id)]
+      [:div [:div {:class "font-heading font-semibold"} (user-label author-id)]
        [:div {:class "text-xs text-muted-foreground"} tweet-id]]
       [:a {:href (str base-path "/tweet/" tweet-id) :class "text-sm underline"} "detail"]]
-     [:p {:class "font-body leading-body"} (:body t)]
+     [:p {:class "font-body leading-body"} (:tweet/body t)]
      [:div {:class "flex flex-wrap items-center gap-2 text-sm"}
       (live/post-button ctx (tweet-descriptor tweet-id)
-       {:to (str base-path "/tweet/" tweet-id "/like") :label (str "♥ " (:like_count t)) :button-attrs {:class (button-class)}})
+       {:to (str base-path "/tweet/" tweet-id "/like") :label (str "♥ " (like-count tweet-id)) :button-attrs {:class (button-class)}})
       (live/post-button ctx (tweet-descriptor tweet-id)
-       {:to (str base-path "/tweet/" tweet-id "/share") :label (str "↻ " (:share_count t)) :button-attrs {:class (button-class)}})
-      [:span {:class "rounded-lg bg-muted px-3 py-1.5 text-sm"} "💬 " (:comment_count t)]]]))
+       {:to (str base-path "/tweet/" tweet-id "/share") :label (str "↻ " (share-count tweet-id)) :button-attrs {:class (button-class)}})
+      [:span {:class "rounded-lg bg-muted px-3 py-1.5 text-sm"} "💬 " (comment-count tweet-id)]]]))
 
 (defn tweet-list [ctx tweets']
   (if (seq tweets')
     [:div {:class "space-y-3"}
-     (for [t tweets'] ^{:key (:tweet_id t)} (tweet-card ctx t))]
+     (for [t tweets'] ^{:key (:tweet/id t)} (tweet-card ctx t))]
     [:div {:class "rounded-xl border border-dashed border-border p-6 text-center text-muted-foreground"} "No tweets yet."]))
 
 (defn global-feed-fragment [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   [:section {:class "space-y-3"}
    [:h3 {:class "font-heading text-lg font-semibold"} "Global feed"]
-   (tweet-list ctx (global-feed-tweets ctx))])
+   (tweet-list ctx (global-feed-tweets))])
 
 (defn timeline-fragment [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [user-id (or (param ctx :user-id) (current-user-id ctx))]
     [:section {:class "space-y-3"}
      [:h3 {:class "font-heading text-lg font-semibold"} "Timeline: " user-id]
-     (tweet-list ctx (timeline-tweets ctx user-id))]))
+     (tweet-list ctx (timeline-tweets user-id))]))
 
 (defn tweet-fragment [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)]
-    (if-let [t (tweet ctx tweet-id)]
+    (if-let [t (tweet tweet-id)]
       [:section {:class "space-y-4"}
        (tweet-card ctx t)
        [:div {:class "rounded-xl border border-border bg-card p-4 space-y-3"}
@@ -285,15 +299,15 @@
          [:input {:name "body" :placeholder "Write a comment" :class (text-input-class)}]
          [:button {:type "submit" :class (button-class)} "Comment"]]
         [:div {:class "space-y-2"}
-         (for [c (comments-for ctx tweet-id)]
-           ^{:key (:comment_id c)}
+         (for [c (comments-for tweet-id)]
+           ^{:key (:comment/id c)}
            [:div {:class "rounded-lg bg-muted px-3 py-2 text-sm"}
-            [:span {:class "font-medium"} (str "@" (:author_id c))] ": " (:body c)])]]]
+            [:span {:class "font-medium"} (user-label (:comment/author-id c))] ": " (:comment/body c)])]]]
       [:div {:class "rounded-xl border border-border bg-card p-4"} "Missing tweet " tweet-id])))
 
-(defn stats-fragment [ctx]
-  (ensure-seeded! ctx)
-  (let [stats (state-summary ctx)]
+(defn stats-fragment [_ctx]
+  (ensure-seeded!)
+  (let [stats (state-summary)]
     [:section {:class "rounded-xl border border-border bg-card p-4"}
      [:h3 {:class "font-heading text-lg font-semibold"} "Microblog stats"]
      [:dl {:class "grid grid-cols-2 gap-2 text-sm"}
@@ -310,13 +324,13 @@
    [:div {:class "flex justify-end"} [:button {:type "submit" :class (button-class)} "Post tweet"]]])
 
 (defn page [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [user-id (current-user-id ctx)]
     (ui/page-shell ctx
       [:section {:class "mx-auto max-w-5xl py-8 space-y-6"}
        [:div {:class "space-y-2"}
-        [:h1 {:class "font-heading text-3xl font-bold"} "Microblog Live Load Demo (XTDB Edition)"]
-        [:p {:class "text-muted-foreground"} "Testing database scaling, XTDB read-after-write consistency, and singleflight cache protection."]
+        [:h1 {:class "font-heading text-3xl font-bold"} "Microblog Live Load Demo"]
+        [:p {:class "text-muted-foreground"} "Fake Twitter-shaped workload for fanout, hot objects, slow clients, and reconnect behavior."]
         [:p {:class "text-sm text-muted-foreground"} "Current synthetic user: " [:code user-id]]]
        (compose-form ctx)
        [:div {:class "grid gap-4 lg:grid-cols-[1fr_1fr]"}
@@ -326,7 +340,7 @@
          (live/fragment-panel (stats-descriptor))]]])))
 
 (defn tweet-page [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)]
     (ui/page-shell ctx
       [:section {:class "mx-auto max-w-3xl py-8 space-y-6"}
@@ -334,80 +348,64 @@
        (live/fragment-panel (tweet-descriptor tweet-id))])))
 
 ;; -----------------------------------------------------------------------------
-;; Mutations (Route Handlers with transact-and-notify!)
+;; Mutations (Route Handlers)
 ;; -----------------------------------------------------------------------------
 
 (declare global-feed-route)
 (declare tweet-route)
 
 (defn create-tweet! [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [author-id (current-user-id ctx)
         body (str/trim (or (param ctx :body) ""))
         body' (if (str/blank? body) (str "Synthetic tweet at " (now-ms)) body)
-        id (random-id "tweet")
-        doc {:xt/id id :tweet_id id :body body' :author_id author-id :created_at (now-ms)
-             :like_count 0 :share_count 0 :comment_count 0}
-
-        ;; Execute TX and Notify SSE clients in one shot
-        result (live/transact-and-notify!
-                (live-system ctx) ctx
-                {:tx-ops [[:put-docs :microblog_tweets doc]]
-                 :change {:topic :microblog/tweet-created :id id :tweet-id id :author-id author-id :change/kind :created}})]
-
-    ;; Use (:ctx result) so the global-feed fetch uses the exact XTDB snapshot-time of the TX we just ran
-    (global-feed-route (:ctx result))))
+        id (next-id! "tweet")
+        t {:xt/id id :tweet/id id :tweet/body body' :tweet/author-id author-id :tweet/created-at (now-ms)}]
+    (swap! !state
+           (fn [s]
+             (let [followers (get-in s [:followers author-id] #{})]
+               (-> s
+                   (assoc-in [:tweets id] t)
+                   (update :global-feed push-feed id)
+                   (update-in [:profile-feeds author-id] push-feed id)
+                   (update-in [:timelines author-id] push-feed id)
+                   (as-> s2 (reduce (fn [acc follower-id] (update-in acc [:timelines follower-id] push-feed id)) s2 followers))))))
+    (submit-change! ctx {:topic :microblog/tweet-created :id id :tweet-id id :author-id author-id :change/kind :created})
+    (global-feed-route ctx)))
 
 (defn like! [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)
         user-id (current-user-id ctx)
-        t (tweet ctx tweet-id)
-        author-id (:author_id t)
-
-        result (live/transact-and-notify!
-                (live-system ctx) ctx
-                ;; Warning: In a real app with concurrent likes, you would use an XTDB transaction function here
-                ;; to increment safely. For this load test, we're just directly putting the updated doc.
-                {:tx-ops [[:put-docs :microblog_tweets (update t :like_count (fnil inc 0))]]
-                 :change {:topic :microblog/tweet-liked :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated}})]
-    (tweet-route (assoc-in (:ctx result) [:params :tweet-id] tweet-id))))
+        author-id (:tweet/author-id (tweet tweet-id))]
+    (swap! !state (fn [s] (update-in s [:likes tweet-id] (fnil inc 0))))
+    (submit-change! ctx {:topic :microblog/tweet-liked :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated})
+    (tweet-route (assoc-in ctx [:params :tweet-id] tweet-id))))
 
 (defn share! [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)
         user-id (current-user-id ctx)
-        t (tweet ctx tweet-id)
-        author-id (:author_id t)
-        share-id (random-id "share")
-
-        result (live/transact-and-notify!
-                (live-system ctx) ctx
-                {:tx-ops [[:put-docs :microblog_shares {:xt/id share-id :tweet_id tweet-id :user_id user-id}]
-                          [:put-docs :microblog_tweets (update t :share_count (fnil inc 0))]]
-                 :change {:topic :microblog/tweet-shared :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated}})]
-    (tweet-route (assoc-in (:ctx result) [:params :tweet-id] tweet-id))))
+        author-id (:tweet/author-id (tweet tweet-id))]
+    (swap! !state (fn [s] (update-in s [:shares tweet-id] (fnil inc 0))))
+    (submit-change! ctx {:topic :microblog/tweet-shared :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated})
+    (tweet-route (assoc-in ctx [:params :tweet-id] tweet-id))))
 
 (defn comment! [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [tweet-id (param ctx :tweet-id)
         user-id (current-user-id ctx)
         body (str/trim (or (param ctx :body) ""))
-        body' (if (str/blank? body) (str "Synthetic comment at " (now-ms)) body)
-        t (tweet ctx tweet-id)
-        author-id (:author_id t)
-        comment-id (random-id "comment")
-        c {:xt/id comment-id :comment_id comment-id :tweet_id tweet-id :author_id user-id :body body' :created_at (now-ms)}
-
-        result (live/transact-and-notify!
-                (live-system ctx) ctx
-                {:tx-ops [[:put-docs :microblog_comments c]
-                          [:put-docs :microblog_tweets (update t :comment_count (fnil inc 0))]]
-                 :change {:topic :microblog/tweet-commented :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated}})]
-    (tweet-route (assoc-in (:ctx result) [:params :tweet-id] tweet-id))))
+        comment-id (next-id! "comment")
+        author-id (:tweet/author-id (tweet tweet-id))
+        c {:xt/id comment-id :comment/id comment-id :comment/tweet-id tweet-id :comment/author-id user-id
+           :comment/body (if (str/blank? body) (str "Synthetic comment at " (now-ms)) body) :comment/created-at (now-ms)}]
+    (swap! !state (fn [s] (update-in s [:comments tweet-id] (fnil conj []) c)))
+    (submit-change! ctx {:topic :microblog/tweet-commented :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated})
+    (tweet-route (assoc-in ctx [:params :tweet-id] tweet-id))))
 
 ;; -----------------------------------------------------------------------------
-;; SSE / fragments (Route Handlers with XTDB Consistency Caching & Singleflight)
+;; SSE / fragments (Route Handlers with Caching & Singleflight)
 ;; -----------------------------------------------------------------------------
 
 (defn run-task-sync
@@ -461,39 +459,74 @@
 ;; Dev/load routes
 ;; -----------------------------------------------------------------------------
 
-(defn state-summary [ctx]
-  (let [c (fn [table] (:c (first (live.xtdb/q-consistent-from ctx (str "SELECT COUNT(*) as c FROM " (name table))))))]
-    {:user-count (c :microblog_users)
-     :tweet-count (c :microblog_tweets)
-     :comment-count (c :microblog_comments)
-     :follow-count (c :microblog_follows)}))
+(defn state-summary []
+  (let [state @!state]
+    {:user-count (count (:users state))
+     :tweet-count (count (:tweets state))
+     :comment-count (count (mapcat val (:comments state)))
+     :like-count (reduce + (vals (:likes state)))
+     :share-count (reduce + (vals (:shares state)))
+     :follow-count (reduce + (map count (vals (:follows state))))
+     :latest-client-time (:created-at state)}))
 
 (defn dev-stats [ctx]
   {:status 200
    :headers {"content-type" "application/edn; charset=utf-8"}
-   :body (pr-str {:microblog (state-summary ctx) :live (live/stats (live-system ctx))})})
+   :body (pr-str {:microblog (state-summary) :live (live/stats (live-system ctx))})})
 
 (defn seed-route! [ctx]
   (let [user-count (parse-long (param ctx :users) default-user-count)
         following-count (parse-long (param ctx :following) default-following-count)
         tweet-count (parse-long (param ctx :tweets) default-seed-tweet-count)]
-    (seed! ctx {:user-count user-count :following-count following-count :tweet-count tweet-count})
+    (seed! {:user-count user-count :following-count following-count :tweet-count tweet-count})
+    (submit-change! ctx {:topic :microblog/tweet-created :id "seed" :tweet-id "seed" :author-id "user-1" :change/kind :updated})
     (dev-stats ctx)))
 
 (defn burst-tweets! [ctx]
-  (ensure-seeded! ctx)
+  (ensure-seeded!)
   (let [n (parse-long (param ctx :n) 100)
-        author-id (str (or (param ctx :author-id) "user-1"))
-        docs (mapv (fn [i]
-                     (let [id (random-id "tweet")]
-                       {:xt/id id :tweet_id id :body (str "Burst tweet " i " at " (now-ms))
-                        :author_id author-id :created_at (+ (now-ms) i)
-                        :like_count 0 :share_count 0 :comment_count 0}))
-                   (range n))]
-    (live.xtdb/execute-tx-from! ctx (mapv #(into [:put-docs :microblog_tweets] [%]) docs))
-    ;; Notify
-    (doseq [d docs]
-      (submit-change! ctx {:topic :microblog/tweet-created :id (:tweet_id d) :tweet-id (:tweet_id d) :author-id author-id :change/kind :created}))
+        author-id (str (or (param ctx :author-id) "user-1"))]
+    (dotimes [i n]
+      (let [id (next-id! "tweet")
+            t {:xt/id id :tweet/id id :tweet/body (str "Burst tweet " i " at " (now-ms))
+               :tweet/author-id author-id :tweet/created-at (+ (now-ms) i)}]
+        (swap! !state
+               (fn [s]
+                 (let [followers (get-in s [:followers author-id] #{})]
+                   (-> s
+                       (assoc-in [:tweets id] t)
+                       (update :global-feed push-feed id)
+                       (update-in [:profile-feeds author-id] push-feed id)
+                       (update-in [:timelines author-id] push-feed id)
+                       (as-> s2 (reduce (fn [acc follower-id] (update-in acc [:timelines follower-id] push-feed id)) s2 followers))))))
+        (submit-change! ctx {:topic :microblog/tweet-created :id id :tweet-id id :author-id author-id :change/kind :created})))
+    (dev-stats ctx)))
+
+(defn random-tweet-id [] (some-> (seq (keys (:tweets @!state))) rand-nth))
+
+(defn burst-likes! [ctx]
+  (ensure-seeded!)
+  (let [n (parse-long (param ctx :n) 100)
+        tweet-id (or (param ctx :tweet-id) (random-tweet-id) "missing")
+        author-id (:tweet/author-id (tweet tweet-id))]
+    (dotimes [i n]
+      (let [user-id (str "load-user-" i)]
+        (swap! !state (fn [s] (update-in s [:likes tweet-id] (fnil inc 0))))
+        (submit-change! ctx {:topic :microblog/tweet-liked :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated})))
+    (dev-stats ctx)))
+
+(defn burst-comments! [ctx]
+  (ensure-seeded!)
+  (let [n (parse-long (param ctx :n) 100)
+        tweet-id (or (param ctx :tweet-id) (random-tweet-id) "missing")
+        author-id (:tweet/author-id (tweet tweet-id))]
+    (dotimes [i n]
+      (let [user-id (str "load-user-" i)
+            comment-id (next-id! "comment")
+            c {:xt/id comment-id :comment/id comment-id :comment/tweet-id tweet-id :comment/author-id user-id
+               :comment/body (str "Burst comment " i) :comment/created-at (+ (now-ms) i)}]
+        (swap! !state (fn [s] (update-in s [:comments tweet-id] (fnil conj []) c)))
+        (submit-change! ctx {:topic :microblog/tweet-commented :id tweet-id :tweet-id tweet-id :author-id author-id :user-id user-id :change/kind :updated})))
     (dev-stats ctx)))
 
 ;; -----------------------------------------------------------------------------
@@ -546,6 +579,8 @@
   [["/api/microblog/dev/stats" {:get dev-stats}]
    ["/api/microblog/dev/seed" {:post seed-route!}]
    ["/api/microblog/dev/burst-tweets" {:post burst-tweets!}]
+   ["/api/microblog/dev/burst-likes" {:post burst-likes!}]
+   ["/api/microblog/dev/burst-comments" {:post burst-comments!}]
    ["/api/microblog/dev/load/stream" {:get load-stream}]
    ["/api/microblog/dev/load/fragments/global" {:get load-global-feed-fragment}]
    ["/api/microblog/dev/load/fragments/timeline" {:get load-timeline-fragment}]
