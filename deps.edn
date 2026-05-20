@@ -25,7 +25,14 @@
                    "-Dio.netty.tryReflectionSetAccessible=true"
                    "-XX:-OmitStackTraceInFastThrow"
                    "-XX:+CrashOnOutOfMemoryError"
-                   "-Dbiff.env.BIFF_PROFILE=dev"]
+                   "-Dbiff.env.BIFF_PROFILE=dev"
+                   ;; required for java 25
+                   "--add-opens=java.base/java.nio=ALL-UNNAMED"
+                   "--enable-native-access=ALL-UNNAMED"
+                   "-Dio.netty.tryReflectionSetAccessible=true"
+                   "-Dio.netty.noUnsafe=false"
+
+                   ]
         :main-opts ["-m" "com.biffweb.task-runner" "tasks/tasks"]}
   :prod {:jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                    "-Dio.netty.tryReflectionSetAccessible=true"
