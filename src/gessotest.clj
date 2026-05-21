@@ -15,6 +15,7 @@
    [gessotest.home :as home]
    [gessotest.middleware :as mid]
    [gessotest.microblog :as microblog]
+   [gessotest.livebench :as livebench]
    [gessotest.schema :as schema]
    [gessotest.simple-shared-counter :as simple-shared-counter]
    [gessotest.toaster-demo :as toaster-demo]
@@ -35,7 +36,9 @@
    toaster-demo/module
    simple-shared-counter/module
    client-plumbing/module
-   microblog/module])
+   microblog/module
+   livebench/module
+   ])
 
 (def routes
   [["" {:middleware [mid/wrap-site-defaults]}
