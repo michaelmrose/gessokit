@@ -109,7 +109,7 @@
   [ctx]
   (let [live-system (live/create
                      {:rules (gesso-live-rules)
-                      :dispatch-options {:threads 1
+                      :dispatch-options {:threads 4
                                          :queue-size 50000
                                          :on-overflow :coalesce}
                       :fragment-options {:ttl-ms 1000}})]
