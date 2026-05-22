@@ -171,14 +171,14 @@
         ;; 1. Use Netty's built-in factory to handle thread naming and daemon status
         thread-factory (io.netty.util.concurrent.DefaultThreadFactory. "aleph-worker" true)
 
-        ;; 2. Rock-solid standard JVM thread pool.
-        worker-pool (java.util.concurrent.ThreadPoolExecutor.
-                     200  ;; core pool size
-                     200  ;; maximum pool size
-                     60   ;; keep-alive time
-                     java.util.concurrent.TimeUnit/SECONDS
-                     (java.util.concurrent.LinkedBlockingQueue. 50000) ;; The massive queue
-                     thread-factory)
+;; Replace the massive LinkedBlockingQueue
+    worker-pool (java.util.concurrent.ThreadPoolExecutor.
+                800 ;; Small, CPU-bound pool
+                800
+                60
+                java.util.concurrent.TimeUnit/SECONDS
+                (java.util.concurrent.ArrayBlockingQueue. 50000) ;; Strict backpressure
+                thread-factory)
 
         server   (aleph/start-server
                   handler'

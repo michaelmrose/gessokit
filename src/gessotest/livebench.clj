@@ -5,7 +5,9 @@
    [clojure.tools.logging :as log]
    [gesso.live.core :as live])
   (:import
-   [java.util.concurrent ConcurrentHashMap]))
+   [java.util.concurrent ConcurrentHashMap]
+   [java.util.concurrent.atomic AtomicLong]
+   ))
 
 ;; -----------------------------------------------------------------------------
 ;; Responses
@@ -153,6 +155,8 @@
          :global-store-seq 0
          :store-ids []
          :stores {}}))
+
+(defonce !global-store-seq (AtomicLong. 0))
 
 (defonce !stats
   (atom (empty-stats)))
@@ -441,6 +445,10 @@
            (for [sid store-ids]
              [sid (atom (initial-store-state sid helpers-per-store))]))}))
 
+
+(defn reset-global-seq! []
+  (.set !global-store-seq 0))
+
 (defn reset-stats! []
   (clojure.core/reset! !stats (empty-stats)))
 
@@ -453,6 +461,7 @@
   (let [cfg (config-from-ctx ctx)]
     (clojure.core/reset! !state (build-world cfg))
     (reset-stats!)
+    ;; (reset-global-seq!)
     (reset-fragments!)
     (json-response
      {:status :ok
@@ -1008,13 +1017,21 @@
 ;; Store/helper selection
 ;; -----------------------------------------------------------------------------
 
-(defn next-store-id
+#_(defn next-store-id
   []
   (let [ids (:store-ids @!state)
         n   (count ids)]
     (when (pos? n)
       (let [idx (dec (:global-store-seq
                      (swap! !state update :global-store-seq inc)))]
+        (nth ids (mod idx n))))))
+
+
+(defn next-store-id []
+  (let [ids (:store-ids @!state)
+        n   (count ids)]
+    (when (pos? n)
+      (let [idx (.getAndIncrement !global-store-seq)]
         (nth ids (mod idx n))))))
 
 (defn choose-store-id

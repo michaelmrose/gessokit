@@ -38,7 +38,13 @@
                    "-Dio.netty.tryReflectionSetAccessible=true"
                     "-XX:-OmitStackTraceInFastThrow"
                     "-XX:+CrashOnOutOfMemoryError"
-                    "-Dbiff.env.BIFF_PROFILE=prod"]
+                    "-Dbiff.env.BIFF_PROFILE=prod"
+                   ;; required for java 25
+                   "--add-opens=java.base/java.nio=ALL-UNNAMED"
+                   "--enable-native-access=ALL-UNNAMED"
+                   "-Dio.netty.tryReflectionSetAccessible=true"
+                   "-Dio.netty.noUnsafe=false"
+                    ]
          :main-opts ["-m" "gessotest"]}}
  :mvn/repos
  {"central"            {:url "https://repo1.maven.org/maven2/"}
