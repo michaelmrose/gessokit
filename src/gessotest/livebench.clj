@@ -3,7 +3,10 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.tools.logging :as log]
-   [gesso.live.core :as live]))
+   [gesso.live.core :as live])
+  (:import
+   [java.util.concurrent ConcurrentHashMap])
+  )
 
 ;; -----------------------------------------------------------------------------
 ;; Responses
@@ -131,7 +134,14 @@
                :renders 0
                :cache-hits 0
                :cache-misses 0
+               :freshness-window-hits 0
+               :stale-version-hits 0
+               :version-misses 0
                :singleflight-shares 0
+               :singleflight-wait-count 0
+               :singleflight-wait-ms-total 0
+               :singleflight-wait-ms-max 0
+               :singleflight-timeouts 0
                :errors 0}})
 
 (defonce !state
@@ -151,10 +161,7 @@
   (atom {}))
 
 (defonce !fragment-inflight
-  (atom {}))
-
-(defonce fragment-lock
-  (Object.))
+  (ConcurrentHashMap.))
 
 ;; -----------------------------------------------------------------------------
 ;; Generic helpers
@@ -239,6 +246,10 @@
 (defn add-stat!
   [path n]
   (swap! !stats update-in path (fnil + 0) n))
+
+(defn max-stat!
+  [path n]
+  (swap! !stats update-in path (fnil max 0) n))
 
 (defn state-update!
   "Atomically update !state.
@@ -385,7 +396,7 @@
 
 (defn reset-fragments! []
   (clojure.core/reset! !fragment-cache {})
-  (clojure.core/reset! !fragment-inflight {}))
+  (.clear ^ConcurrentHashMap !fragment-inflight))
 
 (defn reset-route!
   [ctx]
@@ -581,54 +592,88 @@
 ;; -----------------------------------------------------------------------------
 
 (defn fragment-cache-key
-  [kind id scope]
-  [kind id (scope-version scope)])
+  "Return the stable cache/singleflight key for a rendered fragment.
+
+   Important: this intentionally does not include scope-version.
+
+   The fragment cache acts as a freshness window. If a fragment was rendered less
+   than :fragment-ttl-ms ago, we may serve it even if the underlying scope
+   version advanced. The stored entry records the scope version for stats and
+   debugging, but the key itself is stable by fragment identity."
+  [kind id _scope]
+  [kind id])
+
+(defn fragment-cache-version
+  [scope]
+  (scope-version scope))
 
 (defn cache-hit
-  [k]
-  (let [{:keys [value expires-at]} (get @!fragment-cache k)]
-    (when (and value (> expires-at (now-ms)))
+  [k current-version]
+  (let [now                         (now-ms)
+        {:keys [value expires-at version]} (get @!fragment-cache k)]
+    (when (and value (> expires-at now))
+      (inc-stat! [:fragments :freshness-window-hits])
+      (when (and (some? version)
+                 (some? current-version)
+                 (not= version current-version))
+        (inc-stat! [:fragments :stale-version-hits]))
       value)))
 
 (defn cache-put!
-  [k value]
-  (let [ttl (get-in @!state [:config :fragment-ttl-ms] 750)]
+  [k current-version value]
+  (let [now (now-ms)
+        ttl (get-in @!state [:config :fragment-ttl-ms] 750)]
     (swap! !fragment-cache assoc k {:value value
-                                    :expires-at (+ (now-ms) ttl)}))
+                                    :version current-version
+                                    :stored-at now
+                                    :expires-at (+ now ttl)}))
   value)
 
+(defn record-singleflight-wait!
+  [started-at-ms]
+  (let [elapsed-ms (max 0 (- (now-ms) started-at-ms))]
+    (inc-stat! [:fragments :singleflight-wait-count])
+    (add-stat! [:fragments :singleflight-wait-ms-total] elapsed-ms)
+    (max-stat! [:fragments :singleflight-wait-ms-max] elapsed-ms)
+    elapsed-ms))
+
+(defn singleflight-timeout-result
+  [k]
+  [:timeout
+   (ex-info
+    "Timed out waiting for livebench fragment render."
+    {:key k})])
+
 (defn protected-fragment
-  [k render-fn]
+  [k current-version render-fn]
   (inc-stat! [:fragments :requests])
   (let [{:keys [cache-enabled singleflight-enabled]} (:config @!state)]
-    (if-let [cached (and cache-enabled (cache-hit k))]
+    (if-let [cached (and cache-enabled (cache-hit k current-version))]
       (do
         (inc-stat! [:fragments :cache-hits])
         cached)
       (do
         (inc-stat! [:fragments :cache-misses])
+        (inc-stat! [:fragments :version-misses])
         (if-not singleflight-enabled
           (try
             (inc-stat! [:fragments :renders])
-            (cache-put! k (render-fn))
+            (cache-put! k current-version (render-fn))
             (catch Throwable t
               (inc-stat! [:fragments :errors])
               (throw t)))
           (let [promise-value (promise)
-                owner?        (atom false)
-                wait-promise  (locking fragment-lock
-                                (if-let [existing (get @!fragment-inflight k)]
-                                  (do
-                                    (inc-stat! [:fragments :singleflight-shares])
-                                    existing)
-                                  (do
-                                    (clojure.core/reset! owner? true)
-                                    (swap! !fragment-inflight assoc k promise-value)
-                                    promise-value)))]
-            (if @owner?
+                existing      (.putIfAbsent
+                               ^ConcurrentHashMap
+                               !fragment-inflight
+                               k
+                               promise-value)]
+            (if (nil? existing)
+              ;; Owner path. This request is responsible for rendering and
+              ;; delivering the result to any joiners.
               (try
                 (inc-stat! [:fragments :renders])
-                (let [value (cache-put! k (render-fn))]
+                (let [value (cache-put! k current-version (render-fn))]
                   (deliver promise-value [:ok value])
                   value)
                 (catch Throwable t
@@ -636,22 +681,39 @@
                   (deliver promise-value [:error t])
                   (throw t))
                 (finally
-                  (swap! !fragment-inflight dissoc k)))
-              (let [[result-kind value]
-                    (deref wait-promise
-                           5000
-                           [:error
-                            (ex-info
-                             "Timed out waiting for livebench fragment render."
-                             {:key k})])]
-                (case result-kind
-                  :ok
-                  value
+                  ;; Remove only our own promise. If something very unusual
+                  ;; happened during reset/re-entry, do not remove a newer
+                  ;; in-flight render for the same key.
+                  (.remove
+                   ^ConcurrentHashMap
+                   !fragment-inflight
+                   k
+                   promise-value)))
 
-                  :error
-                  (do
-                    (inc-stat! [:fragments :errors])
-                    (throw value)))))))))))
+              ;; Joiner path. Another request is already rendering this exact
+              ;; fragment key, so wait for that result instead of rendering again.
+              (do
+                (inc-stat! [:fragments :singleflight-shares])
+                (let [started-at-ms (now-ms)
+                      [result-kind value]
+                      (deref existing
+                             5000
+                             (singleflight-timeout-result k))]
+                  (record-singleflight-wait! started-at-ms)
+                  (case result-kind
+                    :ok
+                    value
+
+                    :timeout
+                    (do
+                      (inc-stat! [:fragments :singleflight-timeouts])
+                      (inc-stat! [:fragments :errors])
+                      (throw value))
+
+                    :error
+                    (do
+                      (inc-stat! [:fragments :errors])
+                      (throw value))))))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Fragment rendering
@@ -755,16 +817,24 @@
                                          :helper-id helper-id})
 
         watch-queue?
-        (let [scope (store-queue-scope store-id)
-              k     (fragment-cache-key :helper-queue store-id scope)]
+        (let [scope           (store-queue-scope store-id)
+              current-version (fragment-cache-version scope)
+              k               (fragment-cache-key :helper-queue store-id scope)]
           (html-response
-           (protected-fragment k #(helper-queue-fragment-html store-id))))
+           (protected-fragment
+            k
+            current-version
+            #(helper-queue-fragment-html store-id))))
 
         :else
-        (let [scope (helper-scope helper-id)
-              k     (fragment-cache-key :helper-personal helper-id scope)]
+        (let [scope           (helper-scope helper-id)
+              current-version (fragment-cache-version scope)
+              k               (fragment-cache-key :helper-personal helper-id scope)]
           (html-response
-           (protected-fragment k #(helper-personal-fragment-html helper-id))))))
+           (protected-fragment
+            k
+            current-version
+            #(helper-personal-fragment-html helper-id))))))
     (catch Throwable t
       (fragment-error-response
        t
@@ -786,10 +856,14 @@
                                            :customer-id customer-id})
 
         :else
-        (let [scope (customer-scope customer-id)
-              k     (fragment-cache-key :customer customer-id scope)]
+        (let [scope           (customer-scope customer-id)
+              current-version (fragment-cache-version scope)
+              k               (fragment-cache-key :customer customer-id scope)]
           (html-response
-           (protected-fragment k #(customer-fragment-html customer-id))))))
+           (protected-fragment
+            k
+            current-version
+            #(customer-fragment-html customer-id))))))
     (catch Throwable t
       (fragment-error-response
        t
@@ -1162,6 +1236,46 @@
 ;; Config/stats
 ;; -----------------------------------------------------------------------------
 
+(defn safe-ratio
+  [numerator denominator]
+  (if (pos? denominator)
+    (double (/ numerator denominator))
+    0.0))
+
+(defn fragment-stats-summary
+  [fragments]
+  (let [requests                   (:requests fragments 0)
+        renders                    (:renders fragments 0)
+        cache-hits                 (:cache-hits fragments 0)
+        cache-misses               (:cache-misses fragments 0)
+        freshness-window-hits      (:freshness-window-hits fragments 0)
+        stale-version-hits         (:stale-version-hits fragments 0)
+        singleflight-shares        (:singleflight-shares fragments 0)
+        singleflight-wait-count    (:singleflight-wait-count fragments 0)
+        singleflight-wait-ms-total (:singleflight-wait-ms-total fragments 0)]
+    (assoc fragments
+           :cache-hit-rate
+           (safe-ratio cache-hits requests)
+
+           :cache-miss-rate
+           (safe-ratio cache-misses requests)
+
+           :render-rate
+           (safe-ratio renders requests)
+
+           :freshness-window-hit-rate
+           (safe-ratio freshness-window-hits requests)
+
+           :stale-version-hit-rate
+           (safe-ratio stale-version-hits requests)
+
+           :singleflight-share-rate
+           (safe-ratio singleflight-shares requests)
+
+           :singleflight-wait-ms-avg
+           (safe-ratio singleflight-wait-ms-total
+                       singleflight-wait-count))))
+
 (defn config-route
   [_ctx]
   (json-response
@@ -1181,13 +1295,16 @@
 
 (defn stats-route
   [_ctx]
-  (let [st @!state
-        tasks (vals (:tasks st))
-        active-customers (count (:customers st))
+  (let [st                 @!state
+        stats              @!stats
+        tasks              (vals (:tasks st))
+        active-customers   (count (:customers st))
         disposed-customers (count (filter #(some? (:customer/left-at %)) tasks))]
     (json-response
      (merge
-      @!stats
+      (assoc stats
+             :fragments
+             (fragment-stats-summary (:fragments stats)))
       {:state {:stores (count (:stores st))
                :helpers (count (:helpers st))
                :active-customers active-customers
@@ -1197,8 +1314,9 @@
                :open-tasks (count (filter #(= :requested (:task/status %)) tasks))
                :active-tasks (count (filter #(= :assigned (:task/status %)) tasks))
                :completed-tasks (count (remove #(#{:requested :assigned} (:task/status %)) tasks))}
-       :fragment-cache {:entries (count @!fragment-cache)
-                        :inflight (count @!fragment-inflight)}}))))
+       :fragment-cache {:entries  (count @!fragment-cache)
+                        :inflight (.size ^ConcurrentHashMap !fragment-inflight)}}))))
+
 
 ;; -----------------------------------------------------------------------------
 ;; Routes
