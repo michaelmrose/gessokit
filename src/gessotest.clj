@@ -197,39 +197,6 @@
               (.close server)
               (.shutdown worker-pool)))))
 
-#_(defn use-aleph
-  "Temporary Biff-style component that starts an Aleph/Netty HTTP server.
-
-   This replaces biff/use-jetty in this app's component list.
-
-   Each Ring request is merged with the current system ctx before being passed
-   to :biff/handler, matching the important app-facing behavior expected by
-   ordinary Biff handlers."
-  [{:biff/keys [host port handler]
-    :or {host "0.0.0.0"
-         port 8080}
-    :as ctx}]
-  (when-not handler
-    (throw
-     (ex-info "Cannot start Aleph server without :biff/handler."
-              {:ctx-keys (set (keys ctx))})))
-  (let [port'    (parse-port port)
-        handler' (fn [request]
-                   (handler (merge ctx request)))
-        server   (aleph/start-server
-                  handler'
-                  {:host host
-                   :port port'})]
-    (log/info "ALEPH SERVER STARTED" {:host host
-                                      :port port'
-                                      :server server})
-    (update ctx :biff/stop
-            (fnil conj [])
-            (fn stop-aleph []
-              (log/info "STOPPING ALEPH SERVER" {:host host
-                                                 :port port'})
-              (.close server)))))
-
 (def components
   [biff/use-aero-config
    biffx/use-xtdb2
