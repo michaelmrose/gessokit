@@ -1,4 +1,4 @@
-/(ns gessotest
+(ns gessotest
   (:require
    [aleph.http :as aleph]
    [clojure.test :as test]
@@ -109,6 +109,13 @@
   [ctx]
   (let [live-system (live/create
                      {:rules (gesso-live-rules)
+                      ;; Indexed source routing is enabled by gesso.live.source.
+                      ;; This window enables source-level coalescing before fanout:
+                      ;; Source-level leading/trailing per-scope throttling.
+                      ;; The first invalidation for a scope wakes immediately;
+                      ;; repeated invalidations within 1000ms collapse to one
+                      ;; trailing wakeup.
+                      :source-options {:coalesce-window-ms 1000}
                       :dispatch-options {:threads 4
                                          :queue-size 50000
                                          :on-overflow :coalesce}
