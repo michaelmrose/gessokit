@@ -5,8 +5,7 @@
    [clojure.tools.logging :as log]
    [gesso.live.core :as live])
   (:import
-   [java.util.concurrent ConcurrentHashMap])
-  )
+   [java.util.concurrent ConcurrentHashMap]))
 
 ;; -----------------------------------------------------------------------------
 ;; Responses
@@ -106,6 +105,7 @@
   {:actions {:arrival-attempts 0
              :customers-created 0
              :arrivals-rejected-customer-capacity-full 0
+             :arrivals-rejected-unknown-store 0
 
              :request-attempts 0
              :requests-created 0
@@ -117,10 +117,12 @@
              :takes 0
              :takes-no-open-task 0
              :takes-no-available-helper 0
+             :takes-unknown-store 0
 
              :disposition-attempts 0
              :dispositions 0
-             :dispositions-no-active-task 0}
+             :dispositions-no-active-task 0
+             :dispositions-unknown-store 0}
 
    :events {:submitted 0
             :accepted 0
@@ -144,15 +146,13 @@
                :singleflight-timeouts 0
                :errors 0}})
 
+;; Global state is intentionally small. Domain data is sharded by store and each
+;; store has its own atom, so independent stores do not fight one global CAS loop.
 (defonce !state
   (atom {:config default-config
          :global-store-seq 0
-         :stores {}
-         :helpers {}
-         :customers {}
-         :customer-tombstones {}
-         :tasks {}
-         :versions {}}))
+         :store-ids []
+         :stores {}}))
 
 (defonce !stats
   (atom (empty-stats)))
@@ -251,18 +251,6 @@
   [path n]
   (swap! !stats update-in path (fnil max 0) n))
 
-(defn state-update!
-  "Atomically update !state.
-
-   f receives old-state and returns [new-state result]."
-  [f]
-  (loop []
-    (let [old @!state
-          [new result] (f old)]
-      (if (compare-and-set! !state old new)
-        result
-        (recur)))))
-
 (defn store-id
   [store-idx]
   (str "store-" store-idx))
@@ -279,21 +267,81 @@
   [store-id task-seq]
   (str "task-" store-id "-" task-seq))
 
+(defn store-id-from-helper-id
+  [helper-id]
+  (second (re-matches #"^helper-(store-\d+)-\d+$" (str helper-id))))
+
+(defn store-id-from-customer-id
+  [customer-id]
+  (second (re-matches #"^customer-(store-\d+)-\d+$" (str customer-id))))
+
+(defn store-id-from-task-id
+  [task-id]
+  (second (re-matches #"^task-(store-\d+)-\d+$" (str task-id))))
+
 (defn remove-id
   [coll id]
   (vec (remove #(= id %) coll)))
+
+(defn current-config
+  []
+  (:config @!state))
+
+(defn store-atom
+  [store-id]
+  (get-in @!state [:stores store-id]))
+
+(defn store-state
+  [store-id]
+  (some-> (store-atom store-id) deref))
+
+(defn all-store-states
+  []
+  (->> (:stores @!state)
+       vals
+       (map deref)))
+
+(defn update-store!
+  "Atomically update one store shard.
+
+   f receives old store-state and returns [new-store-state result]."
+  [store-id f]
+  (if-let [!store (store-atom store-id)]
+    (loop []
+      (let [old @!store
+            [new result] (f old)]
+        (if (compare-and-set! !store old new)
+          result
+          (recur))))
+    {:status :rejected
+     :reason :unknown-store
+     :store-id store-id
+     :expected-events 0}))
 
 (defn scope-key
   [{:keys [topic id]}]
   [topic id])
 
+(defn scope-store-id
+  [{:keys [topic id store-id]}]
+  (or store-id
+      (case topic
+        :humanhelp/store-queue id
+        :humanhelp/helper (store-id-from-helper-id id)
+        :humanhelp/customer (store-id-from-customer-id id)
+        nil)))
+
 (defn scope-version
   [scope]
-  (get-in @!state [:versions (scope-key scope)] 0))
+  (if-let [sid (scope-store-id scope)]
+    (get-in (store-state sid) [:versions (scope-key scope)] 0)
+    0))
 
 (defn bump-scope-version!
   [scope]
-  (swap! !state update-in [:versions (scope-key scope)] (fnil inc 0)))
+  (when-let [sid (scope-store-id scope)]
+    (when-let [!store (store-atom sid)]
+      (swap! !store update-in [:versions (scope-key scope)] (fnil inc 0)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Config/world setup
@@ -360,36 +408,38 @@
                     (:seed default-config))
                 (:seed default-config))})
 
+(defn initial-store-state
+  [sid helpers-per-store]
+  (let [helper-ids (mapv #(helper-id sid %) (range helpers-per-store))]
+    {:store {:store/id sid
+             :store/helper-ids helper-ids
+             :store/active-customer-ids []
+             :store/open-task-ids []
+             :store/active-task-ids []
+             :store/completed-task-ids []
+             :store/customer-seq 0
+             :store/task-seq 0}
+     :helpers
+     (into {}
+           (for [hid helper-ids]
+             [hid {:helper/id hid
+                   :helper/store-id sid
+                   :helper/active-task-id nil}]))
+     :customers {}
+     :customer-tombstones {}
+     :tasks {}
+     :versions {}}))
+
 (defn build-world
   [{:keys [stores helpers-per-store] :as cfg}]
   (let [store-ids (mapv store-id (range stores))]
     {:config cfg
      :global-store-seq 0
-     :versions {}
-     :customers {}
-     :customer-tombstones {}
-     :tasks {}
-
+     :store-ids store-ids
      :stores
      (into {}
            (for [sid store-ids]
-             [sid {:store/id sid
-                   :store/helper-ids (mapv #(helper-id sid %) (range helpers-per-store))
-                   :store/active-customer-ids []
-                   :store/open-task-ids []
-                   :store/active-task-ids []
-                   :store/completed-task-ids []
-                   :store/customer-seq 0
-                   :store/task-seq 0}]))
-
-     :helpers
-     (into {}
-           (for [sid store-ids
-                 hidx (range helpers-per-store)
-                 :let [hid (helper-id sid hidx)]]
-             [hid {:helper/id hid
-                   :helper/store-id sid
-                   :helper/active-task-id nil}]))}))
+             [sid (atom (initial-store-state sid helpers-per-store))]))}))
 
 (defn reset-stats! []
   (clojure.core/reset! !stats (empty-stats)))
@@ -419,17 +469,20 @@
 (defn helper-scope
   [helper-id]
   {:topic :humanhelp/helper
-   :id helper-id})
+   :id helper-id
+   :store-id (store-id-from-helper-id helper-id)})
 
 (defn customer-scope
   [customer-id]
   {:topic :humanhelp/customer
-   :id customer-id})
+   :id customer-id
+   :store-id (store-id-from-customer-id customer-id)})
 
 (defn store-queue-scope
   [store-id]
   {:topic :humanhelp/store-queue
-   :id store-id})
+   :id store-id
+   :store-id store-id})
 
 (defn live-system
   [ctx]
@@ -454,7 +507,7 @@
 
    :unique disables practical coalescing for transport smoke tests."
   [scope data]
-  (case (get-in @!state [:config :coalesce-mode] :scope)
+  (case (:coalesce-mode (current-config) :scope)
     :action
     [:livebench/action
      (scope-key scope)
@@ -532,8 +585,8 @@
 ;; -----------------------------------------------------------------------------
 
 (defn expected-events
-  [action {:keys [store-id helper-id customer-id]}]
-  (let [{:keys [mode helpers-per-store]} (:config @!state)]
+  [action {:keys [helper-id customer-id]}]
+  (let [{:keys [mode helpers-per-store]} (current-config)]
     (case mode
       :customer-lifecycle
       (case action
@@ -594,12 +647,11 @@
 (defn fragment-cache-key
   "Return the stable cache/singleflight key for a rendered fragment.
 
-   Important: this intentionally does not include scope-version.
+   Important: this intentionally does NOT include scope-version.
 
    The fragment cache acts as a freshness window. If a fragment was rendered less
-   than :fragment-ttl-ms ago, we may serve it even if the underlying scope
-   version advanced. The stored entry records the scope version for stats and
-   debugging, but the key itself is stable by fragment identity."
+   than :fragment-ttl-ms ago, the benchmark may serve it even if the underlying
+   scope version advanced. The stored entry still records the version for stats."
   [kind id _scope]
   [kind id])
 
@@ -609,7 +661,7 @@
 
 (defn cache-hit
   [k current-version]
-  (let [now                         (now-ms)
+  (let [now (now-ms)
         {:keys [value expires-at version]} (get @!fragment-cache k)]
     (when (and value (> expires-at now))
       (inc-stat! [:fragments :freshness-window-hits])
@@ -621,8 +673,8 @@
 
 (defn cache-put!
   [k current-version value]
-  (let [now (now-ms)
-        ttl (get-in @!state [:config :fragment-ttl-ms] 750)]
+  (let [ttl (get-in (current-config) [:fragment-ttl-ms] 750)
+        now (now-ms)]
     (swap! !fragment-cache assoc k {:value value
                                     :version current-version
                                     :stored-at now
@@ -647,7 +699,7 @@
 (defn protected-fragment
   [k current-version render-fn]
   (inc-stat! [:fragments :requests])
-  (let [{:keys [cache-enabled singleflight-enabled]} (:config @!state)]
+  (let [{:keys [cache-enabled singleflight-enabled]} (current-config)]
     (if-let [cached (and cache-enabled (cache-hit k current-version))]
       (do
         (inc-stat! [:fragments :cache-hits])
@@ -669,8 +721,6 @@
                                k
                                promise-value)]
             (if (nil? existing)
-              ;; Owner path. This request is responsible for rendering and
-              ;; delivering the result to any joiners.
               (try
                 (inc-stat! [:fragments :renders])
                 (let [value (cache-put! k current-version (render-fn))]
@@ -681,17 +731,12 @@
                   (deliver promise-value [:error t])
                   (throw t))
                 (finally
-                  ;; Remove only our own promise. If something very unusual
-                  ;; happened during reset/re-entry, do not remove a newer
-                  ;; in-flight render for the same key.
                   (.remove
                    ^ConcurrentHashMap
                    !fragment-inflight
                    k
                    promise-value)))
 
-              ;; Joiner path. Another request is already rendering this exact
-              ;; fragment key, so wait for that result instead of rendering again.
               (do
                 (inc-stat! [:fragments :singleflight-shares])
                 (let [started-at-ms (now-ms)
@@ -729,36 +774,43 @@
 
 (defn tasks-for-helper
   [helper-id n]
-  (->> (:tasks @!state)
-       vals
-       (filter #(= helper-id (:task/helper-id %)))
-       (sort-by :task/updated-at >)
-       (take n)))
+  (if-let [sid (store-id-from-helper-id helper-id)]
+    (->> (vals (:tasks (store-state sid)))
+         (filter #(= helper-id (:task/helper-id %)))
+         (sort-by :task/updated-at >)
+         (take n))
+    []))
 
 (defn tasks-for-customer
   [customer-id n]
-  (->> (:tasks @!state)
-       vals
-       (filter #(= customer-id (:task/customer-id %)))
-       (sort-by :task/updated-at >)
-       (take n)))
+  (if-let [sid (store-id-from-customer-id customer-id)]
+    (->> (vals (:tasks (store-state sid)))
+         (filter #(= customer-id (:task/customer-id %)))
+         (sort-by :task/updated-at >)
+         (take n))
+    []))
 
 (defn latest-tasks-for-store
   [store-id n]
-  (->> (:tasks @!state)
-       vals
-       (filter #(= store-id (:task/store-id %)))
+  (->> (vals (:tasks (store-state store-id)))
        (sort-by :task/updated-at >)
        (take n)))
 
+(defn get-helper
+  [helper-id]
+  (when-let [sid (store-id-from-helper-id helper-id)]
+    (get-in (store-state sid) [:helpers helper-id])))
+
 (defn active-or-tombstone-customer
   [customer-id]
-  (or (get-in @!state [:customers customer-id])
-      (get-in @!state [:customer-tombstones customer-id])))
+  (when-let [sid (store-id-from-customer-id customer-id)]
+    (let [ss (store-state sid)]
+      (or (get-in ss [:customers customer-id])
+          (get-in ss [:customer-tombstones customer-id])))))
 
 (defn helper-personal-fragment-html
   [helper-id]
-  (let [helper (get-in @!state [:helpers helper-id])
+  (let [helper (get-helper helper-id)
         tasks  (tasks-for-helper helper-id 10)]
     (str "<section id=\"helper-personal-fragment\">"
          "<h2>Helper " helper-id "</h2>"
@@ -769,7 +821,7 @@
 
 (defn helper-queue-fragment-html
   [store-id]
-  (let [store (get-in @!state [:stores store-id])
+  (let [store (:store (store-state store-id))
         tasks (latest-tasks-for-store store-id 10)]
     (str "<section id=\"helper-queue-fragment\">"
          "<h2>Store queue " store-id "</h2>"
@@ -806,7 +858,7 @@
   (try
     (let [helper-id    (param ctx :helper-id)
           watch-queue? (parse-bool* (param ctx :watch-queue) false)
-          helper       (get-in @!state [:helpers helper-id])
+          helper       (get-helper helper-id)
           store-id     (:helper/store-id helper)]
       (cond
         (str/blank? (str helper-id))
@@ -890,7 +942,7 @@
   [ctx]
   (let [helper-id    (param ctx :helper-id)
         watch-queue? (parse-bool* (param ctx :watch-queue) false)
-        helper       (get-in @!state [:helpers helper-id])
+        helper       (get-helper helper-id)
         store-id     (:helper/store-id helper)]
     (cond
       (str/blank? (str helper-id))
@@ -956,38 +1008,43 @@
 ;; Store/helper selection
 ;; -----------------------------------------------------------------------------
 
+(defn next-store-id
+  []
+  (let [ids (:store-ids @!state)
+        n   (count ids)]
+    (when (pos? n)
+      (let [idx (dec (:global-store-seq
+                     (swap! !state update :global-store-seq inc)))]
+        (nth ids (mod idx n))))))
+
 (defn choose-store-id
-  [st explicit-store-id]
-  (if explicit-store-id
-    [st explicit-store-id]
-    (let [n         (count (:stores st))
-          idx       (mod (:global-store-seq st) n)
-          store-id' (store-id idx)]
-      [(update st :global-store-seq inc) store-id'])))
+  [explicit-store-id]
+  (or explicit-store-id
+      (next-store-id)))
 
 (defn available-helper-id
-  [st store-id]
+  [ss]
   (some (fn [hid]
-          (when-not (get-in st [:helpers hid :helper/active-task-id])
+          (when-not (get-in ss [:helpers hid :helper/active-task-id])
             hid))
-        (get-in st [:stores store-id :store/helper-ids])))
+        (get-in ss [:store :store/helper-ids])))
 
 (defn helper-available?
-  [st helper-id]
-  (and (contains? (:helpers st) helper-id)
-       (nil? (get-in st [:helpers helper-id :helper/active-task-id]))))
+  [ss helper-id]
+  (and (contains? (:helpers ss) helper-id)
+       (nil? (get-in ss [:helpers helper-id :helper/active-task-id]))))
 
 (defn open-task-id
-  [st store-id explicit-task-id]
+  [ss explicit-task-id]
   (or explicit-task-id
-      (first (get-in st [:stores store-id :store/open-task-ids]))))
+      (first (get-in ss [:store :store/open-task-ids]))))
 
 (defn helper-with-active-task-id
-  [st store-id]
+  [ss]
   (some (fn [hid]
-          (when (get-in st [:helpers hid :helper/active-task-id])
+          (when (get-in ss [:helpers hid :helper/active-task-id])
             hid))
-        (get-in st [:stores store-id :store/helper-ids])))
+        (get-in ss [:store :store/helper-ids])))
 
 ;; -----------------------------------------------------------------------------
 ;; Actions
@@ -996,85 +1053,104 @@
 (defn arrive-customer!
   [ctx]
   (inc-stat! [:actions :arrival-attempts])
-  (let [result
-        (state-update!
-         (fn [st]
-           (let [[st store-id'] (choose-store-id st (param ctx :store-id))
-                 cfg           (:config st)
-                 active-count  (count (get-in st [:stores store-id' :store/active-customer-ids]))
-                 capacity      (:max-active-customers-per-store cfg)]
-             (if (>= active-count capacity)
-               [st (controlled-rejection :customer-arrival :customer-capacity-full)]
-               (let [seq'        (get-in st [:stores store-id' :store/customer-seq])
-                     customer-id' (customer-id store-id' seq')
-                     customer    {:customer/id customer-id'
-                                  :customer/store-id store-id'
-                                  :customer/state :active
-                                  :customer/active-task-id nil
-                                  :customer/arrived-at (now-ms)
-                                  :customer/left-at nil}]
-                 [(-> st
-                      (update-in [:stores store-id' :store/customer-seq] inc)
-                      (update-in [:stores store-id' :store/active-customer-ids] conj customer-id')
-                      (assoc-in [:customers customer-id'] customer))
-                  (ok-result
-                   :customer-arrival
-                   {:store-id store-id'
-                    :customer-id customer-id'
-                    :expected-events 0})])))))]
-    (if (= :ok (:status result))
+  (let [store-id' (choose-store-id (param ctx :store-id))
+        result
+        (if-not (store-atom store-id')
+          (controlled-rejection :customer-arrival :unknown-store)
+          (update-store!
+           store-id'
+           (fn [ss]
+             (let [cfg          (current-config)
+                   active-count (count (get-in ss [:store :store/active-customer-ids]))
+                   capacity     (:max-active-customers-per-store cfg)]
+               (if (>= active-count capacity)
+                 [ss (controlled-rejection :customer-arrival :customer-capacity-full)]
+                 (let [seq'         (get-in ss [:store :store/customer-seq])
+                       customer-id' (customer-id store-id' seq')
+                       customer     {:customer/id customer-id'
+                                     :customer/store-id store-id'
+                                     :customer/state :active
+                                     :customer/active-task-id nil
+                                     :customer/arrived-at (now-ms)
+                                     :customer/left-at nil}]
+                   [(-> ss
+                        (update-in [:store :store/customer-seq] inc)
+                        (update-in [:store :store/active-customer-ids] conj customer-id')
+                        (assoc-in [:customers customer-id'] customer))
+                    (ok-result
+                     :customer-arrival
+                     {:store-id store-id'
+                      :customer-id customer-id'
+                      :expected-events 0})]))))))]
+    (case (:status result)
+      :ok
       (inc-stat! [:actions :customers-created])
-      (inc-stat! [:actions :arrivals-rejected-customer-capacity-full]))
+
+      :rejected
+      (case (:reason result)
+        :customer-capacity-full
+        (inc-stat! [:actions :arrivals-rejected-customer-capacity-full])
+
+        :unknown-store
+        (inc-stat! [:actions :arrivals-rejected-unknown-store])
+
+        nil)
+
+      nil)
     (action-response result)))
 
 (defn request!
   [ctx]
   (inc-stat! [:actions :request-attempts])
-  (let [result
-        (state-update!
-         (fn [st]
-           (let [customer-id' (param ctx :customer-id)
-                 customer     (get-in st [:customers customer-id'])]
-             (cond
-               (nil? customer)
-               [st (controlled-rejection :request :no-active-customer)]
+  (let [customer-id' (param ctx :customer-id)
+        store-id'    (store-id-from-customer-id customer-id')
+        result
+        (if-not (store-atom store-id')
+          (controlled-rejection :request :no-active-customer)
+          (update-store!
+           store-id'
+           (fn [ss]
+             (let [customer (get-in ss [:customers customer-id'])]
+               (cond
+                 (nil? customer)
+                 [ss (controlled-rejection :request :no-active-customer)]
 
-               (:customer/active-task-id customer)
-               [st (controlled-rejection :request :customer-already-has-task)]
+                 (:customer/active-task-id customer)
+                 [ss (controlled-rejection :request :customer-already-has-task)]
 
-               :else
-               (let [store-id'  (:customer/store-id customer)
-                     open-count (count (get-in st [:stores store-id' :store/open-task-ids]))
-                     max-open   (get-in st [:config :max-open-tasks-per-store])]
-                 (if (>= open-count max-open)
-                   [st (controlled-rejection :request :queue-full)]
-                   (let [seq'    (get-in st [:stores store-id' :store/task-seq])
-                         task-id' (task-id store-id' seq')
-                         task    {:task/id task-id'
-                                  :task/store-id store-id'
-                                  :task/customer-id customer-id'
-                                  :task/helper-id nil
-                                  :task/status :requested
-                                  :task/created-at (now-ms)
-                                  :task/updated-at (now-ms)
-                                  :task/version 0
-                                  :task/customer-arrived-at (:customer/arrived-at customer)
-                                  :task/customer-left-at nil}
-                         ids     {:store-id store-id'
-                                  :customer-id customer-id'}
-                         expected (expected-events :request ids)]
-                     [(-> st
-                          (update-in [:stores store-id' :store/task-seq] inc)
-                          (assoc-in [:tasks task-id'] task)
-                          (assoc-in [:customers customer-id' :customer/active-task-id] task-id')
-                          (update-in [:stores store-id' :store/open-task-ids] conj task-id'))
-                      (ok-result
-                       :request
-                       {:store-id store-id'
-                        :customer-id customer-id'
-                        :task-id task-id'
-                        :expected-events expected
-                        :ids ids})])))))))]
+                 :else
+                 (let [open-count (count (get-in ss [:store :store/open-task-ids]))
+                       max-open   (get-in (current-config) [:max-open-tasks-per-store])]
+                   (if (>= open-count max-open)
+                     [ss (controlled-rejection :request :queue-full)]
+                     (let [seq'     (get-in ss [:store :store/task-seq])
+                           task-id' (task-id store-id' seq')
+                           now      (now-ms)
+                           task     {:task/id task-id'
+                                     :task/store-id store-id'
+                                     :task/customer-id customer-id'
+                                     :task/helper-id nil
+                                     :task/status :requested
+                                     :task/created-at now
+                                     :task/updated-at now
+                                     :task/version 0
+                                     :task/customer-arrived-at (:customer/arrived-at customer)
+                                     :task/customer-left-at nil}
+                           ids      {:store-id store-id'
+                                     :customer-id customer-id'}
+                           expected (expected-events :request ids)]
+                       [(-> ss
+                            (update-in [:store :store/task-seq] inc)
+                            (assoc-in [:tasks task-id'] task)
+                            (assoc-in [:customers customer-id' :customer/active-task-id] task-id')
+                            (update-in [:store :store/open-task-ids] conj task-id'))
+                        (ok-result
+                         :request
+                         {:store-id store-id'
+                          :customer-id customer-id'
+                          :task-id task-id'
+                          :expected-events expected
+                          :ids ids})]))))))))]
     (if (= :ok (:status result))
       (do
         (inc-stat! [:actions :requests-created])
@@ -1104,45 +1180,48 @@
 (defn take!
   [ctx]
   (inc-stat! [:actions :take-attempts])
-  (let [result
-        (state-update!
-         (fn [st]
-           (let [[st store-id'] (choose-store-id st (param ctx :store-id))
-                 task-id'      (open-task-id st store-id' (param ctx :task-id))]
-             (if-not task-id'
-               [st (controlled-rejection :take :no-open-task)]
-               (let [helper-id' (or (param ctx :helper-id)
-                                    (available-helper-id st store-id'))]
-                 (cond
-                   (nil? helper-id')
-                   [st (controlled-rejection :take :no-available-helper)]
+  (let [store-id' (choose-store-id (param ctx :store-id))
+        result
+        (if-not (store-atom store-id')
+          (controlled-rejection :take :unknown-store)
+          (update-store!
+           store-id'
+           (fn [ss]
+             (let [task-id' (open-task-id ss (param ctx :task-id))]
+               (if-not task-id'
+                 [ss (controlled-rejection :take :no-open-task)]
+                 (let [helper-id' (or (param ctx :helper-id)
+                                      (available-helper-id ss))]
+                   (cond
+                     (nil? helper-id')
+                     [ss (controlled-rejection :take :no-available-helper)]
 
-                   (not (helper-available? st helper-id'))
-                   [st (controlled-rejection :take :no-available-helper)]
+                     (not (helper-available? ss helper-id'))
+                     [ss (controlled-rejection :take :no-available-helper)]
 
-                   :else
-                   (let [task        (get-in st [:tasks task-id'])
-                         customer-id' (:task/customer-id task)
-                         ids         {:store-id store-id'
-                                      :helper-id helper-id'
-                                      :customer-id customer-id'}
-                         expected    (expected-events :take ids)]
-                     [(-> st
-                          (assoc-in [:tasks task-id' :task/status] :assigned)
-                          (assoc-in [:tasks task-id' :task/helper-id] helper-id')
-                          (assoc-in [:tasks task-id' :task/updated-at] (now-ms))
-                          (update-in [:tasks task-id' :task/version] (fnil inc 0))
-                          (assoc-in [:helpers helper-id' :helper/active-task-id] task-id')
-                          (update-in [:stores store-id' :store/open-task-ids] remove-id task-id')
-                          (update-in [:stores store-id' :store/active-task-ids] conj task-id'))
-                      (ok-result
-                       :take
-                       {:store-id store-id'
-                        :helper-id helper-id'
-                        :customer-id customer-id'
-                        :task-id task-id'
-                        :expected-events expected
-                        :ids ids})])))))))]
+                     :else
+                     (let [task         (get-in ss [:tasks task-id'])
+                           customer-id' (:task/customer-id task)
+                           ids          {:store-id store-id'
+                                         :helper-id helper-id'
+                                         :customer-id customer-id'}
+                           expected     (expected-events :take ids)]
+                       [(-> ss
+                            (assoc-in [:tasks task-id' :task/status] :assigned)
+                            (assoc-in [:tasks task-id' :task/helper-id] helper-id')
+                            (assoc-in [:tasks task-id' :task/updated-at] (now-ms))
+                            (update-in [:tasks task-id' :task/version] (fnil inc 0))
+                            (assoc-in [:helpers helper-id' :helper/active-task-id] task-id')
+                            (update-in [:store :store/open-task-ids] remove-id task-id')
+                            (update-in [:store :store/active-task-ids] conj task-id'))
+                        (ok-result
+                         :take
+                         {:store-id store-id'
+                          :helper-id helper-id'
+                          :customer-id customer-id'
+                          :task-id task-id'
+                          :expected-events expected
+                          :ids ids})]))))))))]
     (if (= :ok (:status result))
       (do
         (inc-stat! [:actions :takes])
@@ -1164,56 +1243,62 @@
           :no-available-helper
           (inc-stat! [:actions :takes-no-available-helper])
 
+          :unknown-store
+          (inc-stat! [:actions :takes-unknown-store])
+
           nil)
         (action-response result)))))
 
 (defn disposition!
   [ctx]
   (inc-stat! [:actions :disposition-attempts])
-  (let [status (valid-disposition-status (or (param ctx :status) "completed"))
+  (let [status    (valid-disposition-status (or (param ctx :status) "completed"))
+        store-id' (choose-store-id (param ctx :store-id))
         result
-        (state-update!
-         (fn [st]
-           (let [[st store-id'] (choose-store-id st (param ctx :store-id))
-                 helper-id'    (or (param ctx :helper-id)
-                                   (helper-with-active-task-id st store-id'))
-                 task-id'      (or (param ctx :task-id)
-                                   (get-in st [:helpers helper-id' :helper/active-task-id]))]
-             (if-not task-id'
-               [st (controlled-rejection :disposition :no-active-task)]
-               (let [task         (get-in st [:tasks task-id'])
-                     customer-id' (:task/customer-id task)
-                     customer     (get-in st [:customers customer-id'])
-                     now          (now-ms)
-                     retention    (get-in st [:config :customer-dispose-retention-ms])
-                     tombstone    (-> customer
-                                      (assoc :customer/state :disposed
-                                             :customer/active-task-id nil
-                                             :customer/left-at now
-                                             :customer/tombstone-expires-at (+ now retention)))
-                     ids          {:store-id store-id'
-                                   :helper-id helper-id'
-                                   :customer-id customer-id'}
-                     expected     (expected-events :disposition ids)]
-                 [(-> st
-                      (assoc-in [:tasks task-id' :task/status] status)
-                      (assoc-in [:tasks task-id' :task/updated-at] now)
-                      (assoc-in [:tasks task-id' :task/customer-left-at] now)
-                      (update-in [:tasks task-id' :task/version] (fnil inc 0))
-                      (assoc-in [:helpers helper-id' :helper/active-task-id] nil)
-                      (update-in [:stores store-id' :store/active-task-ids] remove-id task-id')
-                      (update-in [:stores store-id' :store/completed-task-ids] conj task-id')
-                      (update-in [:stores store-id' :store/active-customer-ids] remove-id customer-id')
-                      (update :customers dissoc customer-id')
-                      (assoc-in [:customer-tombstones customer-id'] tombstone))
-                  (ok-result
-                   :disposition
-                   {:store-id store-id'
-                    :helper-id helper-id'
-                    :customer-id customer-id'
-                    :task-id task-id'
-                    :expected-events expected
-                    :ids ids})])))))]
+        (if-not (store-atom store-id')
+          (controlled-rejection :disposition :unknown-store)
+          (update-store!
+           store-id'
+           (fn [ss]
+             (let [helper-id' (or (param ctx :helper-id)
+                                  (helper-with-active-task-id ss))
+                   task-id'   (or (param ctx :task-id)
+                                  (get-in ss [:helpers helper-id' :helper/active-task-id]))]
+               (if-not task-id'
+                 [ss (controlled-rejection :disposition :no-active-task)]
+                 (let [task         (get-in ss [:tasks task-id'])
+                       customer-id' (:task/customer-id task)
+                       customer     (get-in ss [:customers customer-id'])
+                       now          (now-ms)
+                       retention    (get-in (current-config) [:customer-dispose-retention-ms])
+                       tombstone    (-> customer
+                                        (assoc :customer/state :disposed
+                                               :customer/active-task-id nil
+                                               :customer/left-at now
+                                               :customer/tombstone-expires-at (+ now retention)))
+                       ids          {:store-id store-id'
+                                     :helper-id helper-id'
+                                     :customer-id customer-id'}
+                       expected     (expected-events :disposition ids)]
+                   [(-> ss
+                        (assoc-in [:tasks task-id' :task/status] status)
+                        (assoc-in [:tasks task-id' :task/updated-at] now)
+                        (assoc-in [:tasks task-id' :task/customer-left-at] now)
+                        (update-in [:tasks task-id' :task/version] (fnil inc 0))
+                        (assoc-in [:helpers helper-id' :helper/active-task-id] nil)
+                        (update-in [:store :store/active-task-ids] remove-id task-id')
+                        (update-in [:store :store/completed-task-ids] conj task-id')
+                        (update-in [:store :store/active-customer-ids] remove-id customer-id')
+                        (update :customers dissoc customer-id')
+                        (assoc-in [:customer-tombstones customer-id'] tombstone))
+                    (ok-result
+                     :disposition
+                     {:store-id store-id'
+                      :helper-id helper-id'
+                      :customer-id customer-id'
+                      :task-id task-id'
+                      :expected-events expected
+                      :ids ids})]))))))]
     (if (= :ok (:status result))
       (do
         (inc-stat! [:actions :dispositions])
@@ -1229,12 +1314,36 @@
                        :status status})]
           (action-response (assoc result :live live))))
       (do
-        (inc-stat! [:actions :dispositions-no-active-task])
+        (case (:reason result)
+          :unknown-store
+          (inc-stat! [:actions :dispositions-unknown-store])
+
+          :no-active-task
+          (inc-stat! [:actions :dispositions-no-active-task])
+
+          nil)
         (action-response result)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Config/stats
 ;; -----------------------------------------------------------------------------
+
+(defn config-route
+  [_ctx]
+  (json-response
+   (assoc (current-config)
+          :live {:relieve-enabled true}
+          :routes {:reset "/api/livebench/reset"
+                   :config "/api/livebench/config"
+                   :stats "/api/livebench/stats"
+                   :helper-stream "/api/livebench/stream/helper"
+                   :customer-stream "/api/livebench/stream/customer"
+                   :helper-fragment "/api/livebench/fragment/helper"
+                   :customer-fragment "/api/livebench/fragment/customer"
+                   :customer-arrive "/api/livebench/customer/arrive"
+                   :request "/api/livebench/request"
+                   :take "/api/livebench/take"
+                   :disposition "/api/livebench/disposition"})))
 
 (defn safe-ratio
   [numerator denominator]
@@ -1276,47 +1385,31 @@
            (safe-ratio singleflight-wait-ms-total
                        singleflight-wait-count))))
 
-(defn config-route
-  [_ctx]
-  (json-response
-   (assoc (:config @!state)
-          :live {:relieve-enabled true}
-          :routes {:reset "/api/livebench/reset"
-                   :config "/api/livebench/config"
-                   :stats "/api/livebench/stats"
-                   :helper-stream "/api/livebench/stream/helper"
-                   :customer-stream "/api/livebench/stream/customer"
-                   :helper-fragment "/api/livebench/fragment/helper"
-                   :customer-fragment "/api/livebench/fragment/customer"
-                   :customer-arrive "/api/livebench/customer/arrive"
-                   :request "/api/livebench/request"
-                   :take "/api/livebench/take"
-                   :disposition "/api/livebench/disposition"})))
-
 (defn stats-route
   [_ctx]
-  (let [st                 @!state
-        stats              @!stats
-        tasks              (vals (:tasks st))
-        active-customers   (count (:customers st))
-        disposed-customers (count (filter #(some? (:customer/left-at %)) tasks))]
+  (let [states              (all-store-states)
+        stats               @!stats
+        tasks               (mapcat #(vals (:tasks %)) states)
+        active-customers    (reduce + (map #(count (:customers %)) states))
+        tombstones          (reduce + (map #(count (:customer-tombstones %)) states))
+        helpers             (reduce + (map #(count (:helpers %)) states))
+        disposed-customers  (count (filter #(some? (:task/customer-left-at %)) tasks))]
     (json-response
      (merge
       (assoc stats
              :fragments
              (fragment-stats-summary (:fragments stats)))
-      {:state {:stores (count (:stores st))
-               :helpers (count (:helpers st))
+      {:state {:stores (count states)
+               :helpers helpers
                :active-customers active-customers
                :disposed-customers disposed-customers
-               :customer-tombstones (count (:customer-tombstones st))
+               :customer-tombstones tombstones
                :tasks (count tasks)
                :open-tasks (count (filter #(= :requested (:task/status %)) tasks))
                :active-tasks (count (filter #(= :assigned (:task/status %)) tasks))
                :completed-tasks (count (remove #(#{:requested :assigned} (:task/status %)) tasks))}
        :fragment-cache {:entries  (count @!fragment-cache)
                         :inflight (.size ^ConcurrentHashMap !fragment-inflight)}}))))
-
 
 ;; -----------------------------------------------------------------------------
 ;; Routes
