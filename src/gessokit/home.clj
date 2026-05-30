@@ -1,8 +1,8 @@
-(ns gessotest.home
+(ns gessokit.home
   (:require [com.biffweb :as biff]
-            [gessotest.middleware :as mid]
-            [gessotest.ui :as ui]
-            [gessotest.settings :as settings]))
+            [gessokit.middleware :as mid]
+            [gessokit.ui :as ui]
+            [gessokit.settings :as settings]))
 
 (def email-disabled-notice
   [:.text-sm.mt-3.bg-blue-100.rounded.p-2

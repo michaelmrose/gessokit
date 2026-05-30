@@ -1,10 +1,10 @@
-(ns gessotest-test
+(ns gessokit-test
   (:require [cheshire.core :as cheshire]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [com.biffweb :as biff :refer [test-xtdb-node]]
-            [gessotest :as main]
-            [gessotest.app :as app]
+            [gessokit :as main]
+            [gessokit.app :as app]
             [malli.generator :as mg]
             [rum.core :as rum]
             [xtdb.api :as xt]))

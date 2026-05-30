@@ -1,6 +1,6 @@
-(ns gessotest.page-examples
+(ns gessokit.page-examples
   (:require
-   [gessotest.ui :as ui]
+   [gessokit.ui :as ui]
    [gesso.core :as gs :refer :all ]
    ))
 (defn- page-demo-nav []

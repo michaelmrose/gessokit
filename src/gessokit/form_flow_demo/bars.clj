@@ -1,4 +1,4 @@
-(ns gessotest.form-flow-demo.bars
+(ns gessokit.form-flow-demo.bars
   (:require
    [gesso.components.bars.core :as bars]
    [gesso.core :as g]))

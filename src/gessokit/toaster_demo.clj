@@ -1,7 +1,7 @@
-(ns gessotest.toaster-demo
+(ns gessokit.toaster-demo
   (:require
    [gesso.core :as g]
-   [gessotest.middleware :as mid]))
+   [gessokit.middleware :as mid]))
 
 ;; -----------------------------------------------------------------------------
 ;; Paths

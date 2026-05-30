@@ -1,23 +1,23 @@
-(ns gessotest.app
+(ns gessokit.app
 
   (:require
    [cheshire.core :as cheshire]
    [com.biffweb :as biff]
    [com.biffweb.experimental :as biffx]
-   [gessotest.middleware :as mid]
-   [gessotest.settings :as settings]
-   [gessotest.ui :as ui]
+   [gessokit.middleware :as mid]
+   [gessokit.settings :as settings]
+   [gessokit.ui :as ui]
    [ring.websocket :as ws]
    [rum.core :as rum]
    [tick.core :as tick]
    [gesso.core :as gs :refer :all ]
-   [gessotest.page-examples :refer :all]
-   [gessotest.bars-demo :refer [bars-demo-page]]
+   [gessokit.page-examples :refer :all]
+   [gessokit.bars-demo :refer [bars-demo-page]]
    ;; [gesso.live.app :as live.app]
-   [gessotest.simple-shared-counter :as simple-shared-counter]
-   [gessotest.form-flow-demo.core :as form-flow-demo]
-   [gessotest.toaster-demo :as toaster-demo]
-   [gessotest.toaster-live-demo :as toaster-live-demo]
+   [gessokit.simple-shared-counter :as simple-shared-counter]
+   [gessokit.form-flow-demo.core :as form-flow-demo]
+   [gessokit.toaster-demo :as toaster-demo]
+   [gessokit.toaster-live-demo :as toaster-live-demo]
    ))
 
 (defn- section-heading

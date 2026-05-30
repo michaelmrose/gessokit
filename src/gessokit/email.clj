@@ -1,6 +1,6 @@
-(ns gessotest.email
+(ns gessokit.email
   (:require [clj-http.client :as http]
-            [gessotest.settings :as settings]
+            [gessokit.settings :as settings]
             [clojure.tools.logging :as log]
             [rum.core :as rum]))
 

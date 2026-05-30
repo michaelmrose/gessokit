@@ -1,4 +1,4 @@
-(ns gessotest.middleware
+(ns gessokit.middleware
   (:require
    [clojure.string :as str]
    [com.biffweb :as biff]
@@ -33,7 +33,7 @@
 
 (defn configured-dev-load-token
   [ctx]
-  (or (:gessotest.load/dev-token ctx)
+  (or (:gessokit.load/dev-token ctx)
       (:dev/load-token ctx)
       (System/getenv "GESSOTEST_LOAD_TOKEN")))
 
@@ -69,7 +69,7 @@
           (forbidden "GESSOTEST_LOAD_TOKEN is not configured.")
 
           (= expected actual)
-          (handler (assoc ctx :gessotest.load/authorized? true))
+          (handler (assoc ctx :gessokit.load/authorized? true))
 
           :else
           (forbidden "Invalid load-test token."))))))

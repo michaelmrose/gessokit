@@ -1,13 +1,13 @@
-(ns gessotest.form-flow-demo.core
+(ns gessokit.form-flow-demo.core
   (:require
    [gesso.components.background.patterns :as bg]
    [gesso.components.bars.core :as bars]
    [gesso.core :as g]
    [gesso.util :as util]
-   [gessotest.form-flow-demo.bars :as demo-bars]
-   [gessotest.form-flow-demo.validation :as validation]
-   [gessotest.middleware :as mid]
-   [gessotest.ui :as ui]))
+   [gessokit.form-flow-demo.bars :as demo-bars]
+   [gessokit.form-flow-demo.validation :as validation]
+   [gessokit.middleware :as mid]
+   [gessokit.ui :as ui]))
 
 ;; -----------------------------------------------------------------------------
 ;; Route paths

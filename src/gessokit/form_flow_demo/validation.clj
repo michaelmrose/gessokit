@@ -1,4 +1,4 @@
-(ns gessotest.form-flow-demo.validation
+(ns gessokit.form-flow-demo.validation
   (:require
    [clojure.string :as str]
    [gesso.util :as util]))

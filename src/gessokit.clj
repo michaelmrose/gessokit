@@ -1,4 +1,4 @@
-(ns gessotest
+(ns gessokit
   (:require
    [aleph.http :as aleph]
    [clojure.test :as test]
@@ -8,19 +8,19 @@
    [com.biffweb.experimental :as biffx]
    [com.biffweb.experimental.auth :as biff-auth]
    [gesso.live.core :as live]
-   [gessotest.app :as app]
-   [gessotest.client-plumbing :as client-plumbing]
-   [gessotest.email :as email]
-   [gessotest.form-flow-demo.core :as form-flow-demo]
-   [gessotest.home :as home]
-   [gessotest.middleware :as mid]
-   [gessotest.microblog :as microblog]
-   [gessotest.livebench :as livebench]
-   [gessotest.schema :as schema]
-   [gessotest.simple-shared-counter :as simple-shared-counter]
-   [gessotest.toaster-demo :as toaster-demo]
-   [gessotest.ui :as ui]
-   [gessotest.worker :as worker]
+   [gessokit.app :as app]
+   [gessokit.client-plumbing :as client-plumbing]
+   [gessokit.email :as email]
+   [gessokit.form-flow-demo.core :as form-flow-demo]
+   [gessokit.home :as home]
+   [gessokit.middleware :as mid]
+   [gessokit.microblog :as microblog]
+   [gessokit.livebench :as livebench]
+   [gessokit.schema :as schema]
+   [gessokit.simple-shared-counter :as simple-shared-counter]
+   [gessokit.toaster-demo :as toaster-demo]
+   [gessokit.ui :as ui]
+   [gessokit.worker :as worker]
    [malli.core :as malc]
    [malli.registry :as malr]
    [nrepl.cmdline :as nrepl-cmd])
@@ -65,7 +65,7 @@
   (biff/add-libs ctx)
   (biff/eval-files! ctx)
   (generate-assets! ctx)
-  (test/run-all-tests #"gessotest.*-test"))
+  (test/run-all-tests #"gessokit.*-test"))
 
 (def malli-opts
   {:registry (malr/composite-registry
@@ -80,7 +80,7 @@
    :biff.beholder/on-save #'on-save
    :biff.middleware/on-error #'ui/on-error
    :biff.xtdb.listener/tables ["user" "msg"]
-   :gessotest.load/dev-token (System/getenv "GESSOTEST_LOAD_TOKEN")})
+   :gessokit.load/dev-token (System/getenv "GESSOTEST_LOAD_TOKEN")})
 
 (defonce system
   (atom {}))
@@ -219,7 +219,7 @@
     (generate-assets! new-system)
     (log/info "System started.")
     (log/info "Go to" (:biff/base-url new-system))
-    (when-not (:gessotest.load/dev-token new-system)
+    (when-not (:gessokit.load/dev-token new-system)
       (log/warn "GESSOTEST_LOAD_TOKEN is not set; /api/microblog/dev/load routes will reject requests."))
     new-system))
 

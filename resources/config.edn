@@ -37,9 +37,9 @@
  :biff.system-properties/clojure.tools.logging.factory "clojure.tools.logging.impl/slf4j-factory"
 
  :biff.tasks/server                 #biff/env DOMAIN
- :biff.tasks/main-ns                gessotest
- :biff.tasks/on-soft-deploy         "\"(gessotest/on-save @gessotest/system)\""
- :biff.tasks/generate-assets-fn     gessotest/generate-assets!
+ :biff.tasks/main-ns                gessokit
+ :biff.tasks/on-soft-deploy         "\"(gessokit/on-save @gessokit/system)\""
+ :biff.tasks/generate-assets-fn     gessokit/generate-assets!
  :biff.tasks/css-output             "target/resources/public/css/main.css"
  :biff.tasks/deploy-untracked-files [#ref [:biff.tasks/css-output]
                                      "config.env"]

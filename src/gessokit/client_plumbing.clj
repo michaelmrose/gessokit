@@ -1,4 +1,4 @@
-(ns gessotest.client-plumbing
+(ns gessokit.client-plumbing
   "App-owned adapter for connected-client OOB delivery.
 
    This namespace owns app policy:
@@ -13,7 +13,7 @@
   (:require
    [gesso.core :as g]
    [gesso.live.client :as live-client]
-   [gessotest.middleware :as mid]))
+   [gessokit.middleware :as mid]))
 
 ;; -----------------------------------------------------------------------------
 ;; App placement
@@ -33,7 +33,7 @@
   "Return the app user id used for client targeting.
 
    Replace this with the real app convention when this pattern moves out of
-   gessotest."
+   gessokit."
   [ctx]
   (str
    (or (:user/id ctx)
@@ -51,7 +51,7 @@
   (let [user-id (current-user-id ctx)]
     {:client/user-id user-id
      :client/scopes  #{[:user user-id]
-                       [:demo :gessotest]}}))
+                       [:demo :gessokit]}}))
 
 ;; -----------------------------------------------------------------------------
 ;; Channel
@@ -59,7 +59,7 @@
 
 (defonce channel
   (live-client/channel
-   {:id :gessotest/client-oob
+   {:id :gessokit/client-oob
     :event "client-oob"
     :endpoint endpoint
     :client current-client}))

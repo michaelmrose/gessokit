@@ -1,9 +1,9 @@
-(ns gessotest.microblog
+(ns gessokit.microblog
   (:require
    [clojure.string :as str]
    [clojure.tools.logging :as log]
    [gesso.live.core :as live]
-   [gessotest.middleware :as mid]
+   [gessokit.middleware :as mid]
    [rum.core :as rum])
   (:import
    [java.util UUID]))
@@ -115,8 +115,8 @@
   (let [user-id (str (load-user-id ctx))
         mode    (load-mode ctx)]
     (-> ctx
-        (assoc :gessotest.load/user-id user-id
-               :gessotest.load/mode mode
+        (assoc :gessokit.load/user-id user-id
+               :gessokit.load/mode mode
                :uid user-id
                :user/id user-id)
         (assoc-in [:session :uid] user-id))))
@@ -152,7 +152,7 @@
 
 (defn subscription-scope
   [ctx]
-  (let [mode    (or (:gessotest.load/mode ctx) :medium)
+  (let [mode    (or (:gessokit.load/mode ctx) :medium)
         user-id (current-user-id ctx)]
     {:topic :microblog/timeline
      :id    (cohort-id mode user-id)}))
@@ -400,7 +400,7 @@
 
 (defn timeline-fragment
   [ctx]
-  (let [mode      (or (:gessotest.load/mode ctx) :medium)
+  (let [mode      (or (:gessokit.load/mode ctx) :medium)
         user-id   (current-user-id ctx)
         cohort-id (cohort-id mode user-id)]
     (protected-fragment
@@ -504,7 +504,7 @@
          ctx
          {:author-id (str (current-user-id ctx))
           :body body
-          :mode (or (:gessotest.load/mode ctx) :medium)})
+          :mode (or (:gessokit.load/mode ctx) :medium)})
         (if (= "true" (get-in ctx [:headers "hx-request"]))
           (no-content)
           {:status 303
@@ -692,7 +692,7 @@
    ["/api/microblog/dev/burst-comments"
     {:post burst-comments!}]
 
-   ;; Protected globally by mid/wrap-dev-load-token in gessotest.clj.
+   ;; Protected globally by mid/wrap-dev-load-token in gessokit.clj.
    ["/api/microblog/dev/load/stream"
     {:get load-stream}]
 

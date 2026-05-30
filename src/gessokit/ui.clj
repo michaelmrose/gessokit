@@ -1,6 +1,6 @@
-(ns gessotest.ui
+(ns gessokit.ui
   (:require [clojure.java.io :as io]
-            [gessotest.settings :as settings]
+            [gessokit.settings :as settings]
             [com.biffweb :as biff]
             [ring.util.response :as ring-response]
             [rum.core :as rum]

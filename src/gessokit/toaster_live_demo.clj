@@ -1,15 +1,15 @@
-(ns gessotest.toaster-live-demo
+(ns gessokit.toaster-live-demo
   "Tiny demo of app-owned client plumbing + Gesso toaster.
 
    This namespace owns only toast-specific demo behavior.
 
    The shared browser-client delivery adapter lives in
-   gessotest.client-plumbing. That adapter owns app policy such as routes,
+   gessokit.client-plumbing. That adapter owns app policy such as routes,
    middleware, current-user-id, and client scopes, while gesso.live.client owns
    the generic connected-client delivery mechanics."
   (:require
    [gesso.core :as g]
-   [gessotest.client-plumbing :as plumbing]))
+   [gessokit.client-plumbing :as plumbing]))
 
 ;; -----------------------------------------------------------------------------
 ;; Toast OOB helpers
@@ -104,10 +104,10 @@
 (defn send-scope-toast!
   []
   (send-toast-to-scope!
-   [:demo :gessotest]
+   [:demo :gessokit]
    {:variant :info
     :title "Scoped toast"
-    :description "Every connected client registered in [:demo :gessotest] should receive this."}))
+    :description "Every connected client registered in [:demo :gessokit] should receive this."}))
 
 ;; -----------------------------------------------------------------------------
 ;; Demo UI
@@ -116,8 +116,8 @@
 (defn repl-examples
   [client-id]
   [:pre {:class "panel-theme radius-md pad-card overflow-auto text-sm-theme"}
-   "(require '[gessotest.toaster-live-demo :as toaster-live])\n"
-   "(require '[gessotest.client-plumbing :as plumbing])\n\n"
+   "(require '[gessokit.toaster-live-demo :as toaster-live])\n"
+   "(require '[gessokit.client-plumbing :as plumbing])\n\n"
 
    ";; Inspect connected clients and pending OOB queues\n"
    "(plumbing/state-summary)\n\n"
@@ -132,9 +132,9 @@
    "   :title \"Targeted SSE toast\"\n"
    "   :description \"Only this connected client should receive this.\"})\n\n"
 
-   ";; Send to the demo scope registered by gessotest.client-plumbing\n"
+   ";; Send to the demo scope registered by gessokit.client-plumbing\n"
    "(toaster-live/send-toast-to-scope!\n"
-   "  [:demo :gessotest]\n"
+   "  [:demo :gessokit]\n"
    "  {:variant :info\n"
    "   :title \"Scoped toast\"\n"
    "   :description \"Every demo-scoped client receives this.\"})\n\n"

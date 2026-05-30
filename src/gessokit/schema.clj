@@ -1,4 +1,4 @@
-(ns gessotest.schema
+(ns gessokit.schema
   (:require [tick.core :as tick]))
 
 (def ? {:optional true})

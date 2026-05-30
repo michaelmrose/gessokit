@@ -1,4 +1,4 @@
-(ns gessotest.livebench
+(ns gessokit.livebench
   (:require
    [cheshire.core :as json]
    [clojure.string :as str]
@@ -59,8 +59,8 @@
 
 (defn configured-token
   [ctx]
-  (or (:gessotest.livebench/dev-token ctx)
-      (:gessotest.load/dev-token ctx)
+  (or (:gessokit.livebench/dev-token ctx)
+      (:gessokit.load/dev-token ctx)
       (System/getenv "GESSOTEST_LOAD_TOKEN")))
 
 (defn bearer-token

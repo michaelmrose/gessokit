@@ -1,7 +1,7 @@
-(ns gessotest.simple-shared-counter
+(ns gessokit.simple-shared-counter
   (:require
    [gesso.live.core :as live]
-   [gessotest.middleware :as mid]))
+   [gessokit.middleware :as mid]))
 
 ;; -----------------------------------------------------------------------------
 ;; Synced value

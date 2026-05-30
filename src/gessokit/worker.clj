@@ -1,4 +1,4 @@
-(ns gessotest.worker
+(ns gessokit.worker
   (:require [clojure.tools.logging :as log]
             [com.biffweb :as biff :refer [q]]
             [com.biffweb.experimental :as biffx]

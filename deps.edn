@@ -45,7 +45,7 @@
                    "-Dio.netty.tryReflectionSetAccessible=true"
                    "-Dio.netty.noUnsafe=false"
                     ]
-         :main-opts ["-m" "gessotest"]}}
+         :main-opts ["-m" "gessokit"]}}
  :mvn/repos
  {"central"            {:url "https://repo1.maven.org/maven2/"}
   "clojars"            {:url "https://clojars.org/repo"}

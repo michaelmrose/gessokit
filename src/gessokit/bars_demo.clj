@@ -1,9 +1,9 @@
-(ns gessotest.bars-demo
+(ns gessokit.bars-demo
   (:require
    [gesso.components.bars.core :as bars]
    [gesso.core :refer [button card group icon status-pill text background]]
    [gesso.components.background.patterns :as bg]
-   [gessotest.ui :as ui]))
+   [gessokit.ui :as ui]))
 
 (defn- demo-link-item
   ([text]
@@ -90,7 +90,7 @@
 (defn- intro-card []
   (card
    {:title "Bars demo"
-    :description "This route exists only to load the current bars component in a real gessotest page."
+    :description "This route exists only to load the current bars component in a real gessokit page."
     :content
     [:div {:class "content-stack-theme"}
      (text
