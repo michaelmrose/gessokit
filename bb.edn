@@ -5,6 +5,34 @@
 
  :tasks
  {
+  to-template
+  {:doc "Regenerate the deps-new template project from this repo."
+   :task (do
+           (shell "rm -rf ../gesso-template-deps-new")
+           (shell "bb to-template.clj gesso-template-deps-new gesso-template local/gesso-template-deps-new"))}
+  new
+  {:doc "Create a project from the sibling gesso-template-deps-new template. Usage: bb new TARGET-DIR PRIMARY-NS"
+   :task
+   (let [[target-dir primary-ns & more] *command-line-args*]
+     (when (or (nil? target-dir)
+               (nil? primary-ns)
+               (seq more))
+       (binding [*out* *err*]
+         (println "Usage:")
+         (println "  bb new TARGET-DIR PRIMARY-NS")
+         (println)
+         (println "Examples:")
+         (println "  bb new ../gargle gargle")
+         (println "  bb new ../humanhelp net.humanhelp"))
+       (System/exit 1))
+
+     (shell "clojure"
+            "-Sdeps" "{:deps {local/template {:local/root \"../gesso-template-deps-new\"}}}"
+            "-Tnew" "create"
+            ":template" "local/gesso-template-deps-new"
+            ":name" primary-ns
+            ":target-dir" target-dir))}
+
   dev
   (shell "clj -M:dev dev")
 
