@@ -9,16 +9,10 @@
    [com.biffweb.experimental.auth :as biff-auth]
    [gesso.live.core :as live]
    [gessokit.app :as app]
-   [gessokit.client-plumbing :as client-plumbing]
    [gessokit.email :as email]
-   [gessokit.form-flow-demo.core :as form-flow-demo]
    [gessokit.home :as home]
    [gessokit.middleware :as mid]
-   [gessokit.microblog :as microblog]
-   [gessokit.livebench :as livebench]
    [gessokit.schema :as schema]
-   [gessokit.simple-shared-counter :as simple-shared-counter]
-   [gessokit.toaster-demo :as toaster-demo]
    [gessokit.ui :as ui]
    [gessokit.worker :as worker]
    [malli.core :as malc]
@@ -32,12 +26,6 @@
    home/module
    schema/module
    worker/module
-   form-flow-demo/module
-   toaster-demo/module
-   simple-shared-counter/module
-   client-plumbing/module
-   microblog/module
-   livebench/module
    ])
 
 (def routes
