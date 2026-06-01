@@ -1,10 +1,15 @@
 (ns gessokit.ui
-  (:require [clojure.java.io :as io]
-            [gessokit.settings :as settings]
-            [com.biffweb :as biff]
-            [ring.util.response :as ring-response]
-            [rum.core :as rum]
-            [gesso.core :refer :all]))
+  (:require
+   [clojure.java.io :as io]
+   [com.biffweb :as biff]
+   [gesso.core :as g]
+   [gessokit.settings :as settings]
+   [ring.util.response :as ring-response]
+   [rum.core :as rum]))
+
+;; -----------------------------------------------------------------------------
+;; Theme defaults
+;; -----------------------------------------------------------------------------
 
 (def default-theme
   {:color-theme "cosmicnight"
@@ -12,26 +17,36 @@
    :typography "ui"
    :shape "default"})
 
-(def default-mode :dark)
+(def default-mode
+  :dark)
 
-(def ^:private axis-specs
+(def axis-specs
   [{:axis :color-theme
     :attr "data-color-theme"
-    :label "Color"}
+    :label "Color"
+    :description "Choose the app color palette."}
 
    {:axis :density
     :attr "data-density"
-    :label "Density"}
+    :label "Density"
+    :description "Adjust spacing, control size, and layout rhythm."}
 
    {:axis :typography
     :attr "data-typography"
-    :label "Typography"}
+    :label "Typography"
+    :description "Choose the body and heading type system."}
 
    {:axis :shape
     :attr "data-shape"
-    :label "Shape"}])
+    :label "Shape"
+    :description "Adjust border radius and component softness."}])
 
-(defn static-path [path]
+;; -----------------------------------------------------------------------------
+;; Static assets
+;; -----------------------------------------------------------------------------
+
+(defn static-path
+  [path]
   (if-some [last-modified (some-> (io/resource (str "public" path))
                                   ring-response/resource-data
                                   :last-modified
@@ -39,7 +54,12 @@
     (str path "?t=" last-modified)
     path))
 
-(defn- theme-css-resources []
+;; -----------------------------------------------------------------------------
+;; Theme discovery
+;; -----------------------------------------------------------------------------
+
+(defn- theme-css-resources
+  []
   (keep io/resource
         ["public/gesso/themes.css"
          "public/gesso/app-themes.css"]))
@@ -56,7 +76,13 @@
          sort
          vec)))
 
-(defn- discovered-theme-options []
+(defn discovered-theme-options
+  "Discover available theme axis values from bundled/app-generated CSS.
+
+   This preserves the useful behavior from the old theme testing bar: when new
+   app themes are generated into public/gesso/app-themes.css, they appear in the
+   UI without hand-editing Clojure."
+  []
   (let [css-blobs (map slurp (theme-css-resources))]
     (reduce
      (fn [m {:keys [axis attr]}]
@@ -66,84 +92,216 @@
                              sort
                              vec)
              fallback   (some-> (get default-theme axis) vector)]
-         (assoc m axis (or (not-empty discovered) fallback []))))
+         (assoc m axis (or (not-empty discovered)
+                           fallback
+                           []))))
      {}
      axis-specs)))
 
-(defn- theme-state
+(defn theme-state
+  "Return the server-rendered theme state for ctx.
+
+   The theme dialog applies changes client-side to document.documentElement.
+   These values are the initial render defaults."
   [ctx]
-  {:color-theme (or (:color-theme ctx) (:data-color-theme ctx) (:color-theme default-theme))
-   :density (or (:density ctx) (:data-density ctx) (:density default-theme))
-   :typography (or (:typography ctx) (:data-typography ctx) (:typography default-theme))
-   :shape (or (:shape ctx) (:data-shape ctx) (:shape default-theme))
-   :mode (or (:mode ctx) (:data-color-theme-mode ctx) default-mode)})
+  {:color-theme (or (:color-theme ctx)
+                    (:data-color-theme ctx)
+                    (:color-theme default-theme))
+   :density (or (:density ctx)
+                (:data-density ctx)
+                (:density default-theme))
+   :typography (or (:typography ctx)
+                   (:data-typography ctx)
+                   (:typography default-theme))
+   :shape (or (:shape ctx)
+              (:data-shape ctx)
+              (:shape default-theme))
+   :mode (or (:mode ctx)
+             (:data-color-theme-mode ctx)
+             default-mode)})
+
+(defn- mode-token
+  [mode]
+  (cond
+    (keyword? mode) (name mode)
+    (nil? mode) (name default-mode)
+    :else (str mode)))
+
+(defn- select-option
+  [selected opt]
+  [:option
+   (cond-> {:value opt}
+     (= (str selected) (str opt))
+     (assoc :selected true))
+   opt])
 
 (defn- theme-select
-  [{:keys [label attr options selected]}]
-  [:label {:class "flex items-center gap-2 text-sm font-body leading-body"}
-   [:span {:class "text-foreground/80"} label]
+  [{:keys [axis attr label description options selected]}]
+  (let [id (str "theme-" (name axis))]
+    [:label {:class "content-stack-theme gap-field"}
+     [:span {:class "font-heading text-sm-theme leading-heading tracking-heading weight-semibold-theme"}
+      label]
+
+     [:span {:class "font-body text-xs-theme leading-body"
+             :style {:color "var(--muted-foreground)"}}
+      description]
+
+     [:select
+      {:id id
+       :name (name axis)
+       :class "control-theme radius-md border-theme font-body text-sm-theme"
+       :style {:border-style "solid"
+               :border-color "var(--border)"
+               :background "var(--background)"
+               :color "var(--foreground)"}
+       :onchange (str "document.documentElement.setAttribute('"
+                      attr
+                      "', this.value)")}
+      (for [opt options]
+        (select-option selected opt))]]))
+
+(defn- mode-select
+  [{:keys [selected]}]
+  [:label {:class "content-stack-theme gap-field"}
+   [:span {:class "font-heading text-sm-theme leading-heading tracking-heading weight-semibold-theme"}
+    "Mode"]
+
+   [:span {:class "font-body text-xs-theme leading-body"
+           :style {:color "var(--muted-foreground)"}}
+    "Switch between light, dark, or your browser preference."]
+
    [:select
-    {:class "select control-theme rounded-lg border-theme bg-background text-foreground"
-     :_ (str "on change set document.documentElement's @" attr " to my value")}
-    (for [opt options]
-      [:option
-       (cond-> {:value opt}
-         (= opt selected) (assoc :selected true))
-       opt])]])
+    {:id "theme-mode"
+     :name "mode"
+     :class "control-theme radius-md border-theme font-body text-sm-theme"
+     :style {:border-style "solid"
+             :border-color "var(--border)"
+             :background "var(--background)"
+             :color "var(--foreground)"}
+     :onchange "window.gessokitSetThemeMode(this.value)"}
+    (for [opt ["dark" "light" "system"]]
+      (select-option (mode-token selected) opt))]])
 
-(defn- theme-testing-bar
-  [{:keys [theme-options color-theme density typography shape]}]
-  [:div {:class "w-full border-b border-border bg-card text-card-foreground"}
-   [:div {:class "mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-3 sm:px-6 lg:px-8"}
-    (button
-     {:text "Toggle dark/light"
-      :variant :outline
-      :attrs
-      {:type "button"
-       :_ "on click
-             if document.documentElement matches .dark
-               remove .dark from document.documentElement
-               set document.documentElement's @data-color-theme-mode to 'light'
-             else
-               add .dark to document.documentElement
-               set document.documentElement's @data-color-theme-mode to 'dark'
-             end"}})
+(defn- theme-control-script
+  []
+  [:script
+   "
+window.gessokitSetThemeMode = function(mode) {
+  var root = document.documentElement;
+  root.setAttribute('data-color-theme-mode', mode);
 
-    (theme-select
-     {:label "Color"
-      :attr "data-color-theme"
-      :options (:color-theme theme-options)
-      :selected color-theme})
+  if (mode === 'dark') {
+    root.classList.add('dark');
+    return;
+  }
 
-    (theme-select
-     {:label "Density"
-      :attr "data-density"
-      :options (:density theme-options)
-      :selected density})
+  if (mode === 'light') {
+    root.classList.remove('dark');
+    return;
+  }
 
-    (theme-select
-     {:label "Typography"
-      :attr "data-typography"
-      :options (:typography theme-options)
-      :selected typography})
+  if (window.matchMedia &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    root.classList.add('dark');
+  } else {
+    root.classList.remove('dark');
+  }
+};
 
-    (theme-select
-     {:label "Shape"
-      :attr "data-shape"
-      :options (:shape theme-options)
-      :selected shape})]])
+window.gessokitOpenThemeDialog = function() {
+  var dialog = document.getElementById('gessokit-theme-dialog');
+  if (dialog && dialog.showModal) {
+    dialog.showModal();
+  }
+};
+"])
 
-(defn base [{:keys [::recaptcha] :as ctx} & body]
+;; -----------------------------------------------------------------------------
+;; Theme dialog
+;; -----------------------------------------------------------------------------
+
+(defn theme-dialog
+  "Render a theme button plus modal dialog.
+
+   Intended placement: the center area of the Human Help app bar.
+
+   This keeps theme discovery in gessokit.ui, while app-specific navigation and
+   bar layout stay in the app/view namespaces."
+  ([ctx]
+   (theme-dialog ctx {}))
+  ([ctx {:keys [trigger-label?]
+         :or {trigger-label? true}}]
+   (let [state         (theme-state ctx)
+         theme-options (discovered-theme-options)]
+     [:<>
+      [:button
+       {:type "button"
+        :class "inline-flex items-center justify-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
+        :style {:border-style "solid"
+                :border-color "var(--border)"
+                :background "var(--card)"
+                :color "var(--card-foreground)"}
+        :aria-label "Theme settings"
+        :onclick "window.gessokitOpenThemeDialog()"}
+       (g/icon "palette" {:size :sm})
+       (when trigger-label?
+         [:span "Theme"])]
+
+      [:dialog
+       {:id "gessokit-theme-dialog"
+        :class "radius-xl border-theme shadow-xl"
+        :style {:border-style "solid"
+                :border-color "var(--border)"
+                :background "var(--card)"
+                :color "var(--card-foreground)"
+                :max-width "min(34rem, calc(100vw - 2rem))"
+                :width "100%"
+                :padding "0"}}
+       [:div {:class "pad-card content-stack-theme"}
+        [:div {:class "title-stack-theme"}
+         [:h2 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-bold-theme"}
+          "Theme"]
+
+         [:p {:class "font-body text-sm-theme leading-body"
+              :style {:color "var(--muted-foreground)"}}
+          "Explore the generated Gesso theme dimensions. Changes apply to this page immediately."]]
+
+        [:div {:class "form-theme"}
+         (for [{:keys [axis attr label description] :as spec} axis-specs]
+           (theme-select
+            (assoc spec
+                   :axis axis
+                   :attr attr
+                   :label label
+                   :description description
+                   :options (get theme-options axis)
+                   :selected (get state axis))))
+
+         (mode-select {:selected (:mode state)})]
+
+        [:div {:class "cluster-theme justify-end"}
+         [:form {:method "dialog"}
+          (g/button
+           {:variant :outline
+            :text "Done"
+            :attrs {:type "submit"}})]]]]])))
+
+;; -----------------------------------------------------------------------------
+;; Base page shell
+;; -----------------------------------------------------------------------------
+
+(defn base
+  [{:keys [::recaptcha] :as ctx} & body]
   (let [{:keys [color-theme density typography shape mode]} (theme-state ctx)]
     (apply
      biff/base-html
      (-> ctx
          (merge
-          (theme {:color-theme color-theme
-                  :density density
-                  :typography typography
-                  :shape shape}
-                 mode))
+          (g/theme {:color-theme color-theme
+                    :density density
+                    :typography typography
+                    :shape shape}
+                   mode))
          (update :base/head
                  (fn [head]
                    (concat
@@ -167,6 +325,7 @@
                      [:script {:src "https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.4"}]
                      [:script {:src "https://unpkg.com/htmx-ext-ws@2.0.2/ws.js"}]
                      [:script {:src "https://unpkg.com/hyperscript.org@0.9.14"}]
+                     (theme-control-script)
                      (when recaptcha
                        [:script {:src "https://www.google.com/recaptcha/api.js"
                                  :async "async"
@@ -185,47 +344,46 @@
         children))
 
 (defn page
-  "The standard app layout shell.
-   Includes a theme testing bar and centers the main content."
+  "Centered standard page shell.
+
+   This no longer renders the old always-visible theme testing bar. App pages
+   that want theme controls should place (theme-dialog ctx) where it belongs,
+   usually in the app bar."
   [ctx & body]
-  (let [theme-options (discovered-theme-options)]
-    (base ctx
-          [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
-           (theme-testing-bar
-            (merge default-theme
-                   {:theme-options theme-options}))
+  (base ctx
+        [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
+         [:main {:class "flex-grow py-10"}
+          (apply container body)]
 
-           [:main {:class "flex-grow py-10"}
-            (apply container body)]
-
-           (toaster {:id "app-toaster"
-                     :position :bottom-right})])))
+         (g/toaster {:id "app-toaster"
+                     :position :bottom-right})]))
 
 (defn page-shell
-  "Like page, but does not force the centered container.
-   Reuses the existing theme testing bar and lets callers supply their own
-   full-page layout."
+  "Full-width app shell.
+
+   Use this for application layouts that render their own bars, page grids, and
+   content surfaces."
   [ctx & body]
-  (let [theme-options (discovered-theme-options)]
-    (base ctx
-          [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
-           (theme-testing-bar
-            (merge default-theme
-                   {:theme-options theme-options}))
+  (base ctx
+        [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
+         (into [:main {:class "flex-grow"}]
+               body)
 
-           (into [:main {:class "flex-grow py-10"}]
-                 body)
+         (g/toaster {:id "app-toaster"
+                     :position :bottom-right})]))
 
-           (toaster {:id "app-toaster"
-                     :position :bottom-right})])))
+;; -----------------------------------------------------------------------------
+;; Errors
+;; -----------------------------------------------------------------------------
 
-(defn on-error [{:keys [status] :as ctx}]
+(defn on-error
+  [{:keys [status] :as ctx}]
   {:status status
    :headers {"content-type" "text/html"}
    :body (rum/render-static-markup
           (page
            ctx
-           [:h1 {:class "font-heading text-2xl"}
+           [:h1 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-semibold-theme"}
             (if (= status 404)
               "Page not found."
               "Something went wrong.")]))})

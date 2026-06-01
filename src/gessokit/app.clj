@@ -26,7 +26,6 @@
   (ui/page
    ctx
    [:div {:class "gap-section space-y-14 font-body leading-body"}
-    (hero-section)
     (scroll-buffer {:size :lg})
     ]))
 
