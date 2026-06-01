@@ -4,9 +4,9 @@
                                           com.xtdb/xtdb-jdbc
                                           com.xtdb/xtdb-rocksdb
                                           org.postgresql/postgresql]}
-        com.xtdb/xtdb-api   {:mvn/version "2.1.0"}
-        com.xtdb/xtdb-aws   {:mvn/version "2.1.0"}
-        com.xtdb/xtdb-core  {:mvn/version "2.1.0"}
+        com.xtdb/xtdb-api   {:mvn/version "2.2.0-beta1"}
+        com.xtdb/xtdb-aws   {:mvn/version "2.2.0-beta1"}
+        com.xtdb/xtdb-core  {:mvn/version "2.2.0-beta1"}
         com.zaxxer/HikariCP {:mvn/version "7.0.2"}
         cheshire/cheshire   {:mvn/version "6.1.0"}
 

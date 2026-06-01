@@ -9,6 +9,7 @@
    [com.biffweb.experimental.auth :as biff-auth]
    [gesso.live.core :as live]
    [gessokit.app :as app]
+   [gessokit.client-plumbing :as client-plumbing]
    [gessokit.email :as email]
    [gessokit.home :as home]
    [gessokit.middleware :as mid]
@@ -22,11 +23,11 @@
 
 (def modules
   [app/module
+   client-plumbing/module
    (biff-auth/module {})
    home/module
    schema/module
-   worker/module
-   ])
+   worker/module])
 
 (def routes
   [["" {:middleware [mid/wrap-site-defaults]}
@@ -64,7 +65,6 @@
   {:biff/modules #'modules
    :biff/send-email #'email/send-email
    :biff/handler #'handler
-   :biff/malli-opts #'malli-opts
    :biff.beholder/on-save #'on-save
    :biff.middleware/on-error #'ui/on-error
    :biff.xtdb.listener/tables ["user" "msg"]
@@ -78,15 +78,13 @@
 ;; -----------------------------------------------------------------------------
 
 (defn gesso-live-rules
+  "Collect Gesso Live invalidation rules from registered modules.
+
+   Human Help exports model-backed rules from gessokit.app/module. Keeping this
+   purely module-driven avoids hardcoded demo rules in the system namespace."
   []
   (vec
-   (concat
-    [{:when-topic :demo-counter
-      :expand (fn [_ctx change]
-                [{:topic (:topic change)
-                  :id (:id change)
-                  :change/kind (:change/kind change)}])}]
-    (mapcat :live-rules modules))))
+   (mapcat :live-rules modules)))
 
 (defn use-gesso-live
   "Biff-style component that creates the app-wide Gesso Live system.
@@ -97,16 +95,19 @@
   [ctx]
   (let [live-system (live/create
                      {:rules (gesso-live-rules)
+
                       ;; Indexed source routing is enabled by gesso.live.source.
+                      ;;
                       ;; This window enables source-level coalescing before fanout:
-                      ;; Source-level leading/trailing per-scope throttling.
-                      ;; The first invalidation for a scope wakes immediately;
+                      ;; the first invalidation for a scope wakes immediately;
                       ;; repeated invalidations within 1000ms collapse to one
                       ;; trailing wakeup.
                       :source-options {:coalesce-window-ms 1000}
+
                       :dispatch-options {:threads 4
                                          :queue-size 50000
                                          :on-overflow :coalesce}
+
                       :fragment-options {:ttl-ms 1000}})]
     (log/info "Gesso Live system started.")
     (-> ctx
@@ -133,9 +134,6 @@
     :else
     (long port)))
 
-;; Cleanly shut down our custom pool
-
-
 (defn use-aleph
   "Temporary Biff-style component that starts an Aleph/Netty HTTP server.
 
@@ -156,24 +154,26 @@
         handler' (fn [request]
                    (handler (merge ctx request)))
 
-        ;; 1. Use Netty's built-in factory to handle thread naming and daemon status
-        thread-factory (io.netty.util.concurrent.DefaultThreadFactory. "aleph-worker" true)
+        thread-factory
+        (io.netty.util.concurrent.DefaultThreadFactory.
+         "aleph-worker"
+         true)
 
-;; Replace the massive LinkedBlockingQueue
-    worker-pool (java.util.concurrent.ThreadPoolExecutor.
-                800 ;; Small, CPU-bound pool
-                800
-                60
-                java.util.concurrent.TimeUnit/SECONDS
-                (java.util.concurrent.ArrayBlockingQueue. 50000) ;; Strict backpressure
-                thread-factory)
+        worker-pool
+        (java.util.concurrent.ThreadPoolExecutor.
+         800
+         800
+         60
+         java.util.concurrent.TimeUnit/SECONDS
+         (java.util.concurrent.ArrayBlockingQueue. 50000)
+         thread-factory)
 
-        server   (aleph/start-server
-                  handler'
-                  {:host host
-                   :port port'
-                   ;; Tell Aleph to use our custom massive queue
-                   :executor worker-pool})]
+        server
+        (aleph/start-server
+         handler'
+         {:host host
+          :port port'
+          :executor worker-pool})]
     (log/info "ALEPH SERVER STARTED" {:host host
                                       :port port'
                                       :server server})
@@ -208,12 +208,13 @@
     (log/info "System started.")
     (log/info "Go to" (:biff/base-url new-system))
     (when-not (:gessokit.load/dev-token new-system)
-      (log/warn "GESSOTEST_LOAD_TOKEN is not set; /api/microblog/dev/load routes will reject requests."))
+      (log/warn "GESSOTEST_LOAD_TOKEN is not set; protected dev/load routes will reject requests."))
     new-system))
 
 (defn -main
   []
-  (java.util.TimeZone/setDefault (java.util.TimeZone/getTimeZone "UTC"))
+  (java.util.TimeZone/setDefault
+   (java.util.TimeZone/getTimeZone "UTC"))
   (let [{:keys [biff.nrepl/args]} (start)]
     (apply nrepl-cmd/-main args)))
 
