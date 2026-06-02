@@ -1,21 +1,18 @@
 (ns gessokit.client-plumbing
   "App-owned adapter for connected-client OOB delivery.
 
-   This namespace owns app policy around connected browser clients:
+   This namespace owns generic app policy around connected browser clients:
 
    - route placement
    - middleware
    - current user identity
-   - client scopes
+   - generic client scopes
    - response wrapping
-   - app-friendly send helpers
-   - toast convenience helpers
+   - app-friendly OOB send helpers
+   - generic toast helpers
 
-   Generic connected-client delivery mechanics live in gesso.live.client.
-
-   Human Help uses this for page-global UI effects such as toasts and OOB
-   updates. Normal request-list fragments should use model-backed Gesso Live
-   fragment streams instead."
+   Feature-specific notification wording belongs in feature namespaces, e.g.
+   gessokit.humanhelp.live."
   (:require
    [gesso.core :as g]
    [gesso.live.client :as live-client]
@@ -32,18 +29,20 @@
    :client-id-param :client-id})
 
 ;; -----------------------------------------------------------------------------
-;; Human Help client scopes
+;; Generic client scopes
 ;; -----------------------------------------------------------------------------
 
-(def humanhelp-store-id
-  "demo-store")
+(def app-scope
+  "Generic all-app connected-browser scope.
 
-(def humanhelp-store-scope
-  "Shared one-store Human Help demo scope for page-global notifications.
+   Feature namespaces can target this when their demo/app is intentionally
+   single-tenant or app-wide. More specific scopes can be added later when we
+   design feature-driven client scope registration."
+  [:app/all])
 
-   This intentionally mirrors the app plan's one-store simplification without
-   making client plumbing depend on gessokit.app.* namespaces."
-  [:humanhelp/store humanhelp-store-id])
+(defn user-scope
+  [user-id]
+  [:user (str user-id)])
 
 ;; -----------------------------------------------------------------------------
 ;; App identity
@@ -81,16 +80,17 @@
 (defn current-client
   "Return the app-defined client descriptor for this connected browser.
 
-   Scopes are opaque to Gesso. The app decides what they mean and must only
-   register scopes the current user is allowed to receive.
+   Scopes are opaque to Gesso. This generic adapter registers:
+   - a per-user scope
+   - an app-wide scope
 
-   For the Human Help analogue, all signed-in users may participate in the one
-   demo store, so every connected user receives the shared store scope."
+   Feature-specific scopes can be added later via an explicit registration hook
+   rather than hardcoding demo feature names here."
   [ctx]
   (let [user-id (current-user-id ctx)]
     {:client/user-id user-id
-     :client/scopes  #{[:user user-id]
-                       humanhelp-store-scope}}))
+     :client/scopes  #{(user-scope user-id)
+                       app-scope}}))
 
 ;; -----------------------------------------------------------------------------
 ;; Channel
@@ -195,7 +195,7 @@
   (apply live-client/broadcast! channel fragments))
 
 ;; -----------------------------------------------------------------------------
-;; Toast helpers
+;; Generic toast helpers
 ;; -----------------------------------------------------------------------------
 
 (def default-toast
@@ -257,24 +257,6 @@
     (merge
      (broadcast! (toast-oob toast'))
      {:toast toast'})))
-
-(defn send-humanhelp-new-request-toast!
-  "Convenience helper for the Human Help one-store demo.
-
-   The request list itself may choose not to jump immediately, but connected
-   users can still receive a page-global toast."
-  [{:keys [request-number title customer-name]}]
-  (send-toast-to-scope!
-   humanhelp-store-scope
-   {:variant :info
-    :title "New request received"
-    :description
-    (str
-     (or customer-name "Someone")
-     " added request #"
-     request-number
-     (when title
-       (str ": " title)))}))
 
 ;; -----------------------------------------------------------------------------
 ;; Introspection

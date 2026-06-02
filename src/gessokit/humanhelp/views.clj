@@ -158,9 +158,6 @@
 
 (defn user-menu
   [user]
-  ;; Use a simple details menu here so the template remains robust even if the
-  ;; exact dropdown component API changes. It can be swapped for
-  ;; g/dropdown-menu later without affecting the Human Help architecture.
   [:details {:class "relative"}
    [:summary {:class "inline-flex cursor-pointer list-none items-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
               :style {:border-style "solid"
@@ -196,16 +193,6 @@
     "Welcome to Human Help."]])
 
 (defn page
-  "Render the full Human Help page shell.
-
-   Expected data:
-     :user
-     :view-state
-     :request-toolbar-panel
-     :request-list-panel
-
-   The panel values are normally produced by gessokit.humanhelp.live so this
-   namespace remains independent from the live model implementation."
   [ctx {:keys [user
                view-state
                request-toolbar-panel
@@ -476,8 +463,7 @@
 
      [:form {:method "post"
              :hx-post (routes/create-request-url)
-             :hx-target (str "#" create-request-dialog-body-id)
-             :hx-swap "outerHTML"
+             :hx-swap "none"
              :class "form-theme"}
       (g/anti-forgery-input ctx)
 
@@ -548,36 +534,55 @@
          :attrs {:type "submit"}})]]]))
 
 (defn create-request-dialog
-  [ctx {:keys [user]}]
-  [:dialog {:id create-request-dialog-id
-            :class "radius-xl border-theme shadow-xl"
-            :style {:border-style "solid"
-                    :border-color "var(--border)"
-                    :background "var(--card)"
-                    :color "var(--card-foreground)"
-                    :max-width "min(34rem, calc(100vw - 2rem))"
-                    :width "100%"
-                    :padding "0"}}
-   (create-request-dialog-content
-    ctx
-    {:user user
-     :values {}
-     :errors {}})])
+  ([ctx {:keys [user] :as opts}]
+   (let [open? (:open? opts)]
+     [:dialog (cond-> {:id create-request-dialog-id
+                       :class "radius-xl border-theme shadow-xl"
+                       :style {:border-style "solid"
+                               :border-color "var(--border)"
+                               :background "var(--card)"
+                               :color "var(--card-foreground)"
+                               :max-width "min(34rem, calc(100vw - 2rem))"
+                               :width "100%"
+                               :padding "0"}}
+                open? (assoc :open true))
+      (create-request-dialog-content
+       ctx
+       {:user user
+        :values (:values opts)
+        :errors (:errors opts)})])))
 
 ;; -----------------------------------------------------------------------------
 ;; OOB / action result views
 ;; -----------------------------------------------------------------------------
 
+(defn create-request-validation-error
+  [ctx {:keys [user values errors]}]
+  (oob-response
+   (g/oob-outer-html
+    create-request-dialog-id
+    (create-request-dialog
+     ctx
+     {:user user
+      :values values
+      :errors errors
+      :open? true}))))
+
 (defn create-request-success
-  [_ctx {:keys [toolbar]}]
+  [ctx {:keys [user toolbar request-list]}]
   (oob-response
    (when toolbar
      (g/oob-outer-html request-toolbar-dom-id toolbar))
-   [:div {:id create-request-dialog-body-id}
-    [:script
-     (str "document.getElementById('"
-          create-request-dialog-id
-          "').close();")]]))
+   (when request-list
+     (g/oob-outer-html request-list-dom-id request-list))
+   (g/oob-outer-html
+    create-request-dialog-id
+    (create-request-dialog
+     ctx
+     {:user user
+      :values {}
+      :errors {}
+      :open? false}))))
 
 (defn refreshed-request-board-fragments
   [_ctx {:keys [toolbar request-list]}]

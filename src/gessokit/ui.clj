@@ -178,43 +178,24 @@
              :border-color "var(--border)"
              :background "var(--background)"
              :color "var(--foreground)"}
-     :onchange "window.gessokitSetThemeMode(this.value)"}
+     :onchange
+     "var root = document.documentElement;
+      root.setAttribute('data-color-theme-mode', this.value);
+      if (this.value === 'dark') {
+        root.classList.add('dark');
+      } else {
+        if (this.value === 'light') {
+          root.classList.remove('dark');
+        } else {
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            root.classList.add('dark');
+          } else {
+            root.classList.remove('dark');
+          }
+        }
+      }"}
     (for [opt ["dark" "light" "system"]]
       (select-option (mode-token selected) opt))]])
-
-(defn- theme-control-script
-  []
-  [:script
-   "
-window.gessokitSetThemeMode = function(mode) {
-  var root = document.documentElement;
-  root.setAttribute('data-color-theme-mode', mode);
-
-  if (mode === 'dark') {
-    root.classList.add('dark');
-    return;
-  }
-
-  if (mode === 'light') {
-    root.classList.remove('dark');
-    return;
-  }
-
-  if (window.matchMedia &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    root.classList.add('dark');
-  } else {
-    root.classList.remove('dark');
-  }
-};
-
-window.gessokitOpenThemeDialog = function() {
-  var dialog = document.getElementById('gessokit-theme-dialog');
-  if (dialog && dialog.showModal) {
-    dialog.showModal();
-  }
-};
-"])
 
 ;; -----------------------------------------------------------------------------
 ;; Theme dialog
@@ -242,7 +223,7 @@ window.gessokitOpenThemeDialog = function() {
                 :background "var(--card)"
                 :color "var(--card-foreground)"}
         :aria-label "Theme settings"
-        :onclick "window.gessokitOpenThemeDialog()"}
+        :onclick "document.getElementById('gessokit-theme-dialog').showModal()"}
        (g/icon "palette" {:size :sm})
        (when trigger-label?
          [:span "Theme"])]
@@ -325,7 +306,6 @@ window.gessokitOpenThemeDialog = function() {
                      [:script {:src "https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.4"}]
                      [:script {:src "https://unpkg.com/htmx-ext-ws@2.0.2/ws.js"}]
                      [:script {:src "https://unpkg.com/hyperscript.org@0.9.14"}]
-                     (theme-control-script)
                      (when recaptcha
                        [:script {:src "https://www.google.com/recaptcha/api.js"
                                  :async "async"

@@ -9,17 +9,15 @@
    - fragment panel helpers
    - fragment response helpers
    - stream response helpers
-   - change constructors
+   - Human Help change constructors
+   - Human Help notification/toast helpers
    - notification helper
 
-   It intentionally does not own:
-   - Ring/Reitit route tables
-   - mutable request state implementation
-   - page-global OOB client plumbing
-   - app shell/base HTML"
+   Generic connected-browser/OOB mechanics live in gessokit.client-plumbing."
   (:require
    [gesso.core :as g]
    [gesso.live.core :as live]
+   [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.domain :as domain]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
@@ -31,6 +29,14 @@
 
 (def store-id
   domain/store-id)
+
+(def notification-scope
+  "Connected-browser scope used for Human Help page-global notifications.
+
+   For now this targets the generic app-wide connected-client scope. If/when
+   client plumbing supports feature-registered scopes, this can become a more
+   specific Human Help store scope without changing app handlers."
+  client-plumbing/app-scope)
 
 (def ^:private render-options-key
   ::render-options)
@@ -342,6 +348,52 @@
    :revision revision
    :actor/id (:user/id actor)
    :actor/email (:user/email actor)})
+
+;; -----------------------------------------------------------------------------
+;; Human Help page-global notifications
+;; -----------------------------------------------------------------------------
+
+(defn request-toast-description
+  [request]
+  (str
+   (or (:request/customer-name request) "Someone")
+   " added request #"
+   (:request/number request)
+   (when (domain/present? (:request/title request))
+     (str ": " (:request/title request)))))
+
+(defn send-new-request-toast!
+  "Send the Human Help new-request toast to connected app browsers.
+
+   This is feature-specific wording layered over generic client plumbing."
+  [request]
+  (client-plumbing/send-toast-to-scope!
+   notification-scope
+   {:variant :info
+    :title "New request received"
+    :description (request-toast-description request)}))
+
+(defn send-reset-toast!
+  "Send a Human Help demo reset toast."
+  []
+  (client-plumbing/send-toast-to-scope!
+   notification-scope
+   {:variant :info
+    :title "Demo reset"
+    :description "The Human Help request board was reset."}))
+
+(defn send-request-action-error-toast!
+  "Send a Human Help request-action error toast.
+
+   App handlers can either return a toast OOB directly through views or call
+   this when they need to push the error to connected clients."
+  [message]
+  (client-plumbing/send-toast-to-scope!
+   notification-scope
+   {:variant :danger
+    :title "Request not updated"
+    :description (or message
+                     "That request action could not be completed.")}))
 
 ;; -----------------------------------------------------------------------------
 ;; Notification
