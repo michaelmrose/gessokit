@@ -685,6 +685,7 @@
    (when (and action request)
      (g/render-toast-oob
       {:variant :success
+       :duration 1000
        :title (domain/action-label action)
        :description (domain/action-result-message action request)}))))
 
