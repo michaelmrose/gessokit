@@ -111,7 +111,7 @@
                 (:data-density ctx)
                 (:density default-theme))
    :typography (or (:typography ctx)
-                   (:data-typography ctx)
+                   (:data-typography default-theme)
                    (:typography default-theme))
    :shape (or (:shape ctx)
               (:data-shape ctx)
@@ -135,9 +135,13 @@
      (assoc :selected true))
    opt])
 
+(defn- theme-select-id
+  [id-prefix axis]
+  (str id-prefix "-" (name axis)))
+
 (defn- theme-select
-  [{:keys [axis attr label description options selected]}]
-  (let [id (str "theme-" (name axis))]
+  [{:keys [axis attr label description options selected id-prefix]}]
+  (let [id (theme-select-id id-prefix axis)]
     [:label {:class "content-stack-theme gap-field"}
      [:span {:class "font-heading text-sm-theme leading-heading tracking-heading weight-semibold-theme"}
       label]
@@ -161,7 +165,7 @@
         (select-option selected opt))]]))
 
 (defn- mode-select
-  [{:keys [selected]}]
+  [{:keys [selected id-prefix]}]
   [:label {:class "content-stack-theme gap-field"}
    [:span {:class "font-heading text-sm-theme leading-heading tracking-heading weight-semibold-theme"}
     "Mode"]
@@ -171,7 +175,7 @@
     "Switch between light, dark, or your browser preference."]
 
    [:select
-    {:id "theme-mode"
+    {:id (str id-prefix "-mode")
      :name "mode"
      :class "control-theme radius-md border-theme font-body text-sm-theme"
      :style {:border-style "solid"
@@ -207,12 +211,24 @@
    Intended placement: the center area of the Human Help app bar.
 
    This keeps theme discovery in gessokit.ui, while app-specific navigation and
-   bar layout stay in the app/view namespaces."
+   bar layout stay in the app/view namespaces.
+
+   Options:
+     :trigger-label?
+       Whether the trigger button includes the text label \"Theme\".
+
+     :id
+       Dialog id. Defaults to \"gessokit-theme-dialog\".
+
+     :id-prefix
+       Prefix for internal select ids. Defaults to :id."
   ([ctx]
    (theme-dialog ctx {}))
-  ([ctx {:keys [trigger-label?]
+  ([ctx {:keys [trigger-label? id id-prefix]
          :or {trigger-label? true}}]
-   (let [state         (theme-state ctx)
+   (let [dialog-id     (or id "gessokit-theme-dialog")
+         id-prefix'    (or id-prefix dialog-id)
+         state         (theme-state ctx)
          theme-options (discovered-theme-options)]
      [:<>
       [:button
@@ -223,13 +239,15 @@
                 :background "var(--card)"
                 :color "var(--card-foreground)"}
         :aria-label "Theme settings"
-        :onclick "document.getElementById('gessokit-theme-dialog').showModal()"}
+        :onclick (str "document.getElementById('"
+                      dialog-id
+                      "').showModal()")}
        (g/icon "palette" {:size :sm})
        (when trigger-label?
          [:span "Theme"])]
 
       [:dialog
-       {:id "gessokit-theme-dialog"
+       {:id dialog-id
         :class "radius-xl border-theme shadow-xl"
         :style {:border-style "solid"
                 :border-color "var(--border)"
@@ -255,10 +273,13 @@
                    :attr attr
                    :label label
                    :description description
+                   :id-prefix id-prefix'
                    :options (get theme-options axis)
                    :selected (get state axis))))
 
-         (mode-select {:selected (:mode state)})]
+         (mode-select
+          {:selected (:mode state)
+           :id-prefix id-prefix'})]
 
         [:div {:class "cluster-theme justify-end"}
          [:form {:method "dialog"}
@@ -326,8 +347,8 @@
 (defn page
   "Centered standard page shell.
 
-   This no longer renders the old always-visible theme testing bar. App pages
-   that want theme controls should place (theme-dialog ctx) where it belongs,
+   This does not render the old always-visible theme testing bar. App pages that
+   want theme controls should place (theme-dialog ctx) where it belongs,
    usually in the app bar."
   [ctx & body]
   (base ctx
