@@ -396,28 +396,28 @@
                            "area" "Paint"
                            "details" "Two inch angled brush"
                            "customer-name" "Pat"}))
-          request-id (:request/id (request-by-title created-title))
-          claim-result (lifecycle-through-app!
-                        app/claim-request!
-                        helper-ctx
-                        request-id)
-          unclaim-result (lifecycle-through-app!
-                          app/unclaim-request!
-                          helper-ctx
-                          request-id)]
+          request-id (:request/id (request-by-title created-title))]
       (is (html-response? (:response create-result)))
 
-      (is (html-response? (:response claim-result)))
-      (is (= :claimed (request-status request-id)))
-      (is (= "helper" (request-claimer request-id)))
-      (is (= :request/claimed
-             (:topic (nth (first (:notify-calls claim-result)) 2))))
+      (let [claim-result (lifecycle-through-app!
+                          app/claim-request!
+                          helper-ctx
+                          request-id)]
+        (is (html-response? (:response claim-result)))
+        (is (= :claimed (request-status request-id)))
+        (is (= "helper" (request-claimer request-id)))
+        (is (= :request/claimed
+               (:topic (nth (first (:notify-calls claim-result)) 2)))))
 
-      (is (html-response? (:response unclaim-result)))
-      (is (= :open (request-status request-id)))
-      (is (nil? (request-claimer request-id)))
-      (is (= :request/unclaimed
-             (:topic (nth (first (:notify-calls unclaim-result)) 2)))))))
+      (let [unclaim-result (lifecycle-through-app!
+                            app/unclaim-request!
+                            helper-ctx
+                            request-id)]
+        (is (html-response? (:response unclaim-result)))
+        (is (= :open (request-status request-id)))
+        (is (nil? (request-claimer request-id)))
+        (is (= :request/unclaimed
+               (:topic (nth (first (:notify-calls unclaim-result)) 2))))))))
 
 (deftest take-over-flow-test
   (testing "another user can take over a claimed request"
@@ -429,23 +429,26 @@
                             "area" "Lumber"
                             "details" "Three sheets"
                             "customer-name" "Robin"}))
-          request-id (:request/id (request-by-title created-title))
-          claim-result (lifecycle-through-app!
-                        app/claim-request!
-                        helper-ctx
-                        request-id)
-          take-over-result (lifecycle-through-app!
-                            app/take-over-request!
-                            other-ctx
-                            request-id)]
-      (is (html-response? (:response claim-result)))
-      (is (= "helper" (request-claimer request-id)))
+          request-id (:request/id (request-by-title created-title))]
+      (let [claim-result (lifecycle-through-app!
+                          app/claim-request!
+                          helper-ctx
+                          request-id)]
+        (is (html-response? (:response claim-result)))
+        (is (= :claimed (request-status request-id)))
+        (is (= "helper" (request-claimer request-id)))
+        (is (= :request/claimed
+               (:topic (nth (first (:notify-calls claim-result)) 2)))))
 
-      (is (html-response? (:response take-over-result)))
-      (is (= :claimed (request-status request-id)))
-      (is (= "other" (request-claimer request-id)))
-      (is (= :request/taken-over
-             (:topic (nth (first (:notify-calls take-over-result)) 2)))))))
+      (let [take-over-result (lifecycle-through-app!
+                              app/take-over-request!
+                              other-ctx
+                              request-id)]
+        (is (html-response? (:response take-over-result)))
+        (is (= :claimed (request-status request-id)))
+        (is (= "other" (request-claimer request-id)))
+        (is (= :request/taken-over
+               (:topic (nth (first (:notify-calls take-over-result)) 2))))))))
 
 (deftest done-flow-test
   (testing "owner can mark their own open request done"
@@ -556,7 +559,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest fragment-url-flow-test
-  (testing "page panels and live fragment options agree with route builders"
+  (testing "live fragment options agree with route builders"
     (let [state {:search "garden"
                  :selected-request-id "hh-req-1"
                  :visible-revision 3}

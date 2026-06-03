@@ -424,6 +424,7 @@
     (is (str/includes? (views/refresh-button-class true)
                        "shadow-lg"))))
 
+
 (deftest request-toolbar-fragment-fresh-test
   (let [node (views/request-toolbar-fragment
               {:ctx ctx
@@ -443,13 +444,15 @@
 
     (let [refresh-form (form-by-hx-post
                         node
-                        (routes/refresh-requests-url view-state))]
+                        (routes/refresh-requests-url))]
       (is refresh-form)
       (is (= "post" (:method (attrs refresh-form))))
       (is (= "none" (:hx-swap (attrs refresh-form))))
-      (is (= "garden" (hidden-input-value refresh-form routes/search-param)))
-      (is (= 3 (hidden-input-value refresh-form
-                                    routes/visible-revision-param))))
+      (is (= "garden"
+             (hidden-input-value refresh-form routes/search-param)))
+      (is (= 3
+             (hidden-input-value refresh-form
+                                 routes/visible-revision-param))))
 
     (let [plus-button (find-first
                        node
@@ -460,6 +463,8 @@
                          views/create-request-dialog-id))
       (is (str/includes? (:onclick (attrs plus-button))
                          ".showModal()")))))
+
+
 
 (deftest request-toolbar-fragment-stale-test
   (let [node (views/request-toolbar-fragment
@@ -487,13 +492,20 @@
   (let [node (views/search-control {:view-state view-state})]
     (is (= views/board-state-form-id (:id (attrs node))))
     (is (= "get" (:method (attrs node))))
-    (is (= (routes/search-requests-url view-state)
+    (is (= (routes/search-requests-url)
            (:hx-get (attrs node))))
     (is (= (str "#" views/request-list-dom-id)
            (:hx-target (attrs node))))
     (is (= "outerHTML" (:hx-swap (attrs node))))
     (is (str/includes? (:hx-trigger (attrs node))
                        "delay:250ms"))
+
+    ;; The search form must not duplicate q in both a hidden input and the
+    ;; visible search input. The visible search input is the only q source.
+    (is (= 1
+           (count
+            (filter #(= routes/search-param (:name (attrs %)))
+                    (inputs node)))))
 
     (let [search-input (find-by-id node "humanhelp-search")]
       (is search-input)

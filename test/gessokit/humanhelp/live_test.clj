@@ -114,6 +114,17 @@
     (all-text tree))))
 
 ;; -----------------------------------------------------------------------------
+;; Ctx/render-option assertions
+;; -----------------------------------------------------------------------------
+
+(defn assert-render-ctx
+  [actual-ctx expected-render-options]
+  (is (= (:anti-forgery-token ctx)
+         (:anti-forgery-token actual-ctx)))
+  (is (= expected-render-options
+         (#'hh-live/render-options actual-ctx))))
+
+;; -----------------------------------------------------------------------------
 ;; Constants / exported values
 ;; -----------------------------------------------------------------------------
 
@@ -152,13 +163,12 @@
 
 (deftest request-toolbar-query-test
   (testing "query merges toolbar data with ctx, store id, and render user"
-    (let [render-ctx (#'hh-live/with-render-options
-                      ctx
-                      {:user user-owner
-                       :view-state {:search ""
-                                    :visible-revision (store/latest-revision)}})
+    (let [render-options {:user user-owner
+                          :view-state {:search ""
+                                       :visible-revision (store/latest-revision)}}
+          render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-toolbar-query render-ctx domain/store-id)]
-      (is (= ctx (:ctx data)))
+      (assert-render-ctx (:ctx data) render-options)
       (is (= domain/store-id (:store/id data)))
       (is (= user-owner (:user data)))
       (is (= (store/latest-revision) (:latest-revision data)))
@@ -171,24 +181,23 @@
       (store/create-request!
        {:user user-owner
         :input (valid-input {:title "New pending request"})})
-      (let [render-ctx (#'hh-live/with-render-options
-                        ctx
-                        {:user user-owner
-                         :view-state {:search ""
-                                      :visible-revision visible-before}})
+      (let [render-options {:user user-owner
+                            :view-state {:search ""
+                                         :visible-revision visible-before}}
+            render-ctx (#'hh-live/with-render-options ctx render-options)
             data (hh-live/request-toolbar-query render-ctx domain/store-id)]
+        (assert-render-ctx (:ctx data) render-options)
         (is (true? (:stale? data)))
         (is (= 1 (:pending-open-count data)))))))
 
 (deftest request-list-query-test
   (testing "query merges board data with ctx, store id, and render user"
-    (let [render-ctx (#'hh-live/with-render-options
-                      ctx
-                      {:user user-owner
-                       :view-state {:search ""
-                                    :visible-revision (store/latest-revision)}})
+    (let [render-options {:user user-owner
+                          :view-state {:search ""
+                                       :visible-revision (store/latest-revision)}}
+          render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-list-query render-ctx domain/store-id)]
-      (is (= ctx (:ctx data)))
+      (assert-render-ctx (:ctx data) render-options)
       (is (= domain/store-id (:store/id data)))
       (is (= user-owner (:user data)))
       (is (= (store/latest-revision) (:latest-revision data)))
@@ -203,12 +212,12 @@
                :area "Seasonal"
                :details "Front doors"
                :customer-name "Mina"})})
-    (let [render-ctx (#'hh-live/with-render-options
-                      ctx
-                      {:user user-owner
-                       :view-state {:search "purple mina seasonal"
-                                    :visible-revision (store/latest-revision)}})
+    (let [render-options {:user user-owner
+                          :view-state {:search "purple mina seasonal"
+                                       :visible-revision (store/latest-revision)}}
+          render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-list-query render-ctx domain/store-id)]
+      (assert-render-ctx (:ctx data) render-options)
       (is (some #(= "Need a purple snow shovel" (:request/title %))
                 (:requests data))))))
 

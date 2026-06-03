@@ -116,6 +116,15 @@
                        (:request/status %))
            (store/all-requests))))
 
+(defn create-open-request!
+  "Create a fresh open request for tests that need independent lifecycle setup
+   inside a single deftest."
+  [overrides]
+  (:request
+   (store/create-request!
+    {:user user-owner
+     :input (valid-input overrides)})))
+
 (defn owner-user-for
   [request]
   {:user/id (:request/customer-user-id request)
@@ -633,7 +642,8 @@
       (is (= (:revision result) (:request/updated-revision updated)))))
 
   (testing "claimer can mark claimed request done"
-    (let [open-request (seeded-open-request)
+    (let [open-request (create-open-request!
+                        {:title "Claimed request to mark done"})
           claim (store/claim-request!
                  {:request-id (:request/id open-request)
                   :user user-helper})
@@ -684,7 +694,8 @@
       (is (= :cancelled (:request/status updated)))))
 
   (testing "claimer can cancel claimed request"
-    (let [open-request (seeded-open-request)
+    (let [open-request (create-open-request!
+                        {:title "Claimed request to cancel"})
           claim (store/claim-request!
                  {:request-id (:request/id open-request)
                   :user user-helper})

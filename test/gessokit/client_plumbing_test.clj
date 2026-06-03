@@ -2,7 +2,6 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [gesso.core :as g]
    [gesso.live.client :as live-client]
    [gessokit.client-plumbing :as plumbing]
    [gessokit.middleware :as mid]))
@@ -225,69 +224,100 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest send-all-test
-  (testing "send! supports :all target"
-    (let [calls (atom [])
-          fragment [:div "Hello"]]
-      (with-redefs [live-client/broadcast!
-                    (recording-fn calls {:sent 2})]
-        (is (= {:sent 2}
-               (plumbing/send! :all fragment)))
-        (is (= 1 (count @calls)))
-        (let [[channel fragment'] (first @calls)]
-          (is (some? channel))
-          (is (= fragment fragment')))))))
-
-(deftest send-client-test
-  (testing "send! supports [:client id] target"
-    (let [calls (atom [])
-          fragment [:div "Hello"]]
-      (with-redefs [live-client/send-to-client!
-                    (recording-fn calls {:sent 1})]
-        (is (= {:sent 1}
-               (plumbing/send! [:client "client-1"] fragment)))
-        (is (= 1 (count @calls)))
-        (let [[channel client-id fragment'] (first @calls)]
-          (is (some? channel))
-          (is (= "client-1" client-id))
-          (is (= fragment fragment')))))))
-
-(deftest send-user-test
-  (testing "send! supports [:user id] target"
-    (let [calls (atom [])
-          fragment [:div "Hello"]]
-      (with-redefs [live-client/send-to-user!
-                    (recording-fn calls {:sent 1})]
-        (is (= {:sent 1}
-               (plumbing/send! [:user "user-1"] fragment)))
-        (is (= 1 (count @calls)))
-        (let [[channel user-id fragment'] (first @calls)]
-          (is (some? channel))
-          (is (= "user-1" user-id))
-          (is (= fragment fragment')))))))
-
-(deftest send-scope-test
-  (testing "send! supports [:scope scope] target"
+  (testing "send! delegates :all target to live-client/send!"
     (let [calls (atom [])
           fragment [:div "Hello"]
-          scope [:demo :scope]]
-      (with-redefs [live-client/send-to-scope!
-                    (recording-fn calls {:sent 3})]
-        (is (= {:sent 3}
-               (plumbing/send! [:scope scope] fragment)))
+          result {:sent 2
+                  :woke 2
+                  :woke? true
+                  :target :all
+                  :fragment-count 1}]
+      (with-redefs [live-client/send!
+                    (recording-fn calls result)]
+        (is (= result
+               (plumbing/send! :all fragment)))
         (is (= 1 (count @calls)))
-        (let [[channel scope' fragment'] (first @calls)]
+        (let [[channel request] (first @calls)]
           (is (some? channel))
-          (is (= scope scope'))
-          (is (= fragment fragment')))))))
+          (is (= :all (:to request)))
+          (is (= [fragment] (vec (:fragments request)))))))))
+
+(deftest send-client-test
+  (testing "send! delegates [:client id] target to live-client/send!"
+    (let [calls (atom [])
+          fragment [:div "Hello"]
+          target [:client "client-1"]
+          result {:sent 1
+                  :woke 1
+                  :woke? true
+                  :target target
+                  :fragment-count 1}]
+      (with-redefs [live-client/send!
+                    (recording-fn calls result)]
+        (is (= result
+               (plumbing/send! target fragment)))
+        (is (= 1 (count @calls)))
+        (let [[channel request] (first @calls)]
+          (is (some? channel))
+          (is (= target (:to request)))
+          (is (= [fragment] (vec (:fragments request)))))))))
+
+(deftest send-user-test
+  (testing "send! delegates [:user id] target to live-client/send!"
+    (let [calls (atom [])
+          fragment [:div "Hello"]
+          target [:user "user-1"]
+          result {:sent 1
+                  :woke 1
+                  :woke? true
+                  :target target
+                  :fragment-count 1}]
+      (with-redefs [live-client/send!
+                    (recording-fn calls result)]
+        (is (= result
+               (plumbing/send! target fragment)))
+        (is (= 1 (count @calls)))
+        (let [[channel request] (first @calls)]
+          (is (some? channel))
+          (is (= target (:to request)))
+          (is (= [fragment] (vec (:fragments request)))))))))
+
+(deftest send-scope-test
+  (testing "send! delegates [:scope scope] target to live-client/send!"
+    (let [calls (atom [])
+          fragment [:div "Hello"]
+          scope [:demo :scope]
+          target [:scope scope]
+          result {:sent 3
+                  :woke 3
+                  :woke? true
+                  :target target
+                  :fragment-count 1}]
+      (with-redefs [live-client/send!
+                    (recording-fn calls result)]
+        (is (= result
+               (plumbing/send! target fragment)))
+        (is (= 1 (count @calls)))
+        (let [[channel request] (first @calls)]
+          (is (some? channel))
+          (is (= target (:to request)))
+          (is (= [fragment] (vec (:fragments request)))))))))
 
 (deftest send-unknown-target-test
-  (testing "unknown target throws ex-info"
-    (try
-      (plumbing/send! [:nope "x"] [:div "Hello"])
-      (is false "Expected send! to throw for unknown target")
-      (catch clojure.lang.ExceptionInfo e
-        (is (str/includes? (ex-message e) "Unknown client plumbing target"))
-        (is (= [:nope "x"] (:target (ex-data e))))))))
+  (testing "unknown targets are delegated to live-client/send! and its error is propagated"
+    (let [target [:nope "x"]]
+      (with-redefs [live-client/send!
+                    (fn [_channel request]
+                      (throw
+                       (ex-info "Unsupported gesso.live client delivery target."
+                                {:request request})))]
+        (try
+          (plumbing/send! target [:div "Hello"])
+          (is false "Expected send! to throw for unknown target")
+          (catch clojure.lang.ExceptionInfo e
+            (is (str/includes? (ex-message e)
+                               "Unsupported gesso.live client delivery target"))
+            (is (= target (get-in (ex-data e) [:request :to])))))))))
 
 (deftest send-convenience-functions-test
   (testing "send-to-client! delegates to live-client/send-to-client!"
@@ -339,15 +369,17 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest send-toast-to-scope-test
-  (testing "send-toast-to-scope! sends a rendered toast fragment to a scope"
+  (testing "send-toast-to-scope! sends a rendered toast fragment to a scope and returns normalized toast"
     (let [calls (atom [])
           scope [:demo :scope]
           toast {:variant :info
                  :title "Hello"
-                 :description "World"}]
+                 :description "World"}
+          normalized (plumbing/normalize-toast toast)]
       (with-redefs [live-client/send-to-scope!
                     (recording-fn calls {:sent 1})]
-        (is (= {:sent 1}
+        (is (= {:sent 1
+                :toast normalized}
                (plumbing/send-toast-to-scope! scope toast)))
         (is (= 1 (count @calls)))
 
@@ -357,14 +389,16 @@
           (is (vector? fragment)))))))
 
 (deftest broadcast-toast-test
-  (testing "broadcast-toast! broadcasts a rendered toast fragment"
+  (testing "broadcast-toast! broadcasts a rendered toast fragment and returns normalized toast"
     (let [calls (atom [])
           toast {:variant :info
                  :title "Hello"
-                 :description "World"}]
+                 :description "World"}
+          normalized (plumbing/normalize-toast toast)]
       (with-redefs [live-client/broadcast!
                     (recording-fn calls {:sent 5})]
-        (is (= {:sent 5}
+        (is (= {:sent 5
+                :toast normalized}
                (plumbing/broadcast-toast! toast)))
         (is (= 1 (count @calls)))
 

@@ -81,9 +81,25 @@
              :value value}]))
 
 (defn view-state-hidden-inputs
+  "Render full view-state hidden inputs.
+
+   Use this for action forms that do not have their own visible search input.
+   Do not use this inside search-control, because that form already has the
+   visible search input named q."
   [{:keys [search selected-request-id visible-revision]}]
   [:div {:style {:display "contents"}}
    (hidden-input routes/search-param search)
+   (hidden-input routes/selected-param selected-request-id)
+   (hidden-input routes/visible-revision-param visible-revision)])
+
+(defn board-state-hidden-inputs
+  "Render board-state hidden inputs for the search form.
+
+   Deliberately omits q/search because the visible search input is the source
+   of truth for q. Rendering both a hidden q and visible q causes repeated
+   params such as [\"\" \"test\"]."
+  [{:keys [selected-request-id visible-revision]}]
+  [:div {:style {:display "contents"}}
    (hidden-input routes/selected-param selected-request-id)
    (hidden-input routes/visible-revision-param visible-revision)])
 
@@ -255,7 +271,9 @@
 (defn refresh-form
   [ctx view-state stale?]
   [:form {:method "post"
-          :hx-post (routes/refresh-requests-url view-state)
+          ;; Keep view-state in the form body only. Do not also put it into the
+          ;; action URL, or repeated params can leak into request handling.
+          :hx-post (routes/refresh-requests-url)
           :hx-swap "none"
           :class "inline-flex"}
    (g/anti-forgery-input ctx)
@@ -321,12 +339,14 @@
   (let [view-state (or view-state {})]
     [:form {:id board-state-form-id
             :method "get"
-            :hx-get (routes/search-requests-url view-state)
+            ;; Do not bake q/selected/visible-revision into hx-get here.
+            ;; The current form controls are the source of truth.
+            :hx-get (routes/search-requests-url)
             :hx-target (str "#" request-list-dom-id)
             :hx-swap "outerHTML"
             :hx-trigger "keyup changed delay:250ms from:#humanhelp-search, search from:#humanhelp-search"
             :class "content-stack-theme"}
-     (view-state-hidden-inputs view-state)
+     (board-state-hidden-inputs view-state)
      (sr-only-label "humanhelp-search" "Search requests")
 
      [:div {:class "relative"}
@@ -423,8 +443,7 @@
        (when-let [claimed-by (:request/claimed-by-email request)]
          [:span {:class "font-body text-xs-theme leading-body"
                  :style {:color "var(--muted-foreground)"}}
-          "claimed by "
-          claimed-by])]]
+          (str "claimed by " claimed-by)])]]
 
      (when selected?
        [:div {:class "content-stack-theme"}
@@ -663,6 +682,7 @@
      :request-list request-list})
    (g/render-toast-oob
     {:variant :success
+     :duration 5000
      :title "Request created"
      :description (if request
                     (str "Request #"
@@ -685,7 +705,7 @@
    (when (and action request)
      (g/render-toast-oob
       {:variant :success
-       :duration 1000
+       :duration 2500
        :title (domain/action-label action)
        :description (domain/action-result-message action request)}))))
 
@@ -693,6 +713,7 @@
   [_ctx {:keys [result]}]
   (g/render-toast-oob
    {:variant :danger
+    :duration 7000
     :title "Request not updated"
     :description (or (get-in result [:error :message])
                      (:message result)
@@ -707,5 +728,6 @@
      :request-list request-list})
    (g/render-toast-oob
     {:variant :info
+     :duration 5000
      :title "Demo reset"
      :description "The Human Help request board was reset."})))

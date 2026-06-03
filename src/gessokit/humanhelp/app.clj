@@ -12,6 +12,7 @@
    The Human Help feature code is isolated under gessokit.humanhelp.* so the
    example app can be removed cleanly from a generated template project."
   (:require
+   [clojure.string :as str]
    [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
@@ -28,23 +29,49 @@
 ;; Request helpers
 ;; -----------------------------------------------------------------------------
 
+(defn scalar-param-value
+  "Normalize a request param value to the scalar value the app expects.
+
+   Repeated browser params can arrive as vectors, for example when a form has
+   two fields with the same name:
+
+     [\"\" \"test\"]
+
+   The last submitted value is treated as authoritative. This preserves normal
+   form-clearing behavior:
+
+     [\"old\" \"\"] => \"\""
+  [x]
+  (cond
+    (nil? x)
+    nil
+
+    (and (sequential? x)
+         (not (map? x)))
+    (last x)
+
+    :else
+    x))
+
 (defn param
   "Read a Ring/Biff request param by keyword or string key.
 
    This stays in the HTTP boundary because it is a request-shape concern.
 
-   Supports plain Ring-style maps as well as common Reitit match placement."
+   Supports plain Ring-style maps as well as common Reitit match placement.
+   Repeated params are normalized with scalar-param-value."
   [ctx k]
-  (or (get-in ctx [:params k])
-      (get-in ctx [:params (name k)])
-      (get-in ctx [:form-params k])
-      (get-in ctx [:form-params (name k)])
-      (get-in ctx [:query-params k])
-      (get-in ctx [:query-params (name k)])
-      (get-in ctx [:path-params k])
-      (get-in ctx [:path-params (name k)])
-      (get-in ctx [:reitit.core/match :path-params k])
-      (get-in ctx [:reitit.core/match :path-params (name k)])))
+  (scalar-param-value
+   (or (get-in ctx [:params k])
+       (get-in ctx [:params (name k)])
+       (get-in ctx [:form-params k])
+       (get-in ctx [:form-params (name k)])
+       (get-in ctx [:query-params k])
+       (get-in ctx [:query-params (name k)])
+       (get-in ctx [:path-params k])
+       (get-in ctx [:path-params (name k)])
+       (get-in ctx [:reitit.core/match :path-params k])
+       (get-in ctx [:reitit.core/match :path-params (name k)]))))
 
 (defn request-id
   [ctx]
@@ -207,6 +234,24 @@
      (ex-info "Unknown Human Help fragment label."
               {:fragment fragment-name}))))
 
+(defn fragment-url
+  [fragment-name]
+  (case fragment-name
+    :request-toolbar (routes/request-toolbar-fragment-url)
+    :request-list (routes/request-list-fragment-url)
+    (throw
+     (ex-info "Unknown Human Help fragment URL."
+              {:fragment fragment-name}))))
+
+(defn stream-url
+  [fragment-name]
+  (case fragment-name
+    :request-toolbar (routes/request-toolbar-stream-url)
+    :request-list (routes/request-list-stream-url)
+    (throw
+     (ex-info "Unknown Human Help stream URL."
+              {:fragment fragment-name}))))
+
 (defn live-panel
   "Render a stable Human Help live panel.
 
@@ -215,35 +260,46 @@
    - sse-connect
    - hx-get
    - hx-trigger
+   - hx-include
 
    The inner node owns the fragment DOM id and is the replaceable target.
 
-   This avoids the broken shape where the initial empty placeholder owns
-   hx-get/hx-trigger, gets replaced by real fragment HTML, and loses the
-   trigger permanently."
-  [fragment-name view-state]
-  (let [{:keys [fragment-url stream-url]}
-        (app-live/fragment-options fragment-name view-state)
-
-        dom-id (fragment-dom-id fragment-name)]
+   Do not bake q/selected/visible-revision into hx-get. The current
+   #humanhelp-board-state form is the source of truth for fragment fetches."
+  [fragment-name _view-state]
+  (let [dom-id (fragment-dom-id fragment-name)]
     [:div {:data-gesso-live-fragment (fragment-label fragment-name)
            :hx-ext "sse"
-           :sse-connect stream-url
-           :hx-get fragment-url
+           :sse-connect (stream-url fragment-name)
+           :hx-get (fragment-url fragment-name)
+           :hx-include (str "#" views/board-state-form-id)
            :hx-trigger live-panel-trigger
            :hx-target (str "#" dom-id)
            :hx-swap "outerHTML"}
      [:div {:id dom-id}]]))
 
 (defn page-panels
-  "Return the stable live panels needed for the Human Help page.
-
-   Do not delegate to app-live/page-panels here. Human Help needs the fetch
-   trigger to live on the stable wrapper while the rendered fragment replaces
-   only the inner DOM target."
+  "Return the stable live panels needed for the Human Help page."
   [view-state]
   {:request-toolbar-panel (live-panel :request-toolbar view-state)
    :request-list-panel (live-panel :request-list view-state)})
+
+(defn board-state-form-oob
+  "Render an OOB replacement for the board-state/search form.
+
+   This keeps the hidden selected/visible-revision state in sync after actions
+   that change board state outside the search form itself."
+  [view-state]
+  (g/oob-outer-html
+   views/board-state-form-id
+   (views/search-control
+    {:view-state (store/normalize-view-state view-state)})))
+
+(defn with-board-state-oob
+  [node view-state]
+  (views/oob-response
+   node
+   (board-state-form-oob view-state)))
 
 ;; -----------------------------------------------------------------------------
 ;; Render helpers
@@ -353,12 +409,14 @@
         toolbar      (render-toolbar-node ctx view-state')
         request-list (render-list-node ctx view-state')]
     (html
-     (views/create-request-success
-      ctx
-      {:user user
-       :request request
-       :toolbar toolbar
-       :request-list request-list}))))
+     (with-board-state-oob
+       (views/create-request-success
+        ctx
+        {:user user
+         :request request
+         :toolbar toolbar
+         :request-list request-list})
+       view-state'))))
 
 (defn create-request!
   "Create a new request from the modal dialog.
@@ -417,9 +475,11 @@
                           :visible-revision
                           (store/latest-revision))]
     (html
-     (views/refreshed-request-board-fragments
-      ctx
-      (board-oob ctx view-state)))))
+     (with-board-state-oob
+       (views/refreshed-request-board-fragments
+        ctx
+        (board-oob ctx view-state))
+       view-state))))
 
 (defn search-requests
   "Render the request list for a search input change."
@@ -427,9 +487,13 @@
   (request-list-fragment ctx))
 
 (defn select-request
-  "Render the request list with one selected/expanded card."
+  "Render the request list with one selected/expanded card and sync board state."
   [ctx]
-  (request-list-fragment ctx))
+  (let [view-state (request-view-state ctx)]
+    (html
+     (with-board-state-oob
+       (render-list-node ctx view-state)
+       view-state))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request lifecycle actions
@@ -473,16 +537,18 @@
            :actor user}))
 
         (html
-         (views/request-lifecycle-result
-          ctx
-          (merge
-           {:user user
-            :action action
-            :request request
-            :previous previous
-            :revision revision
-            :view-state view-state}
-           (board-oob ctx view-state)))))
+         (with-board-state-oob
+           (views/request-lifecycle-result
+            ctx
+            (merge
+             {:user user
+              :action action
+              :request request
+              :previous previous
+              :revision revision
+              :view-state view-state}
+             (board-oob ctx view-state)))
+           view-state)))
 
       (html
        (views/request-action-error
@@ -549,13 +615,15 @@
     (app-live/send-reset-toast!)
 
     (html
-     (views/reset-demo-result
-      ctx
-      (merge
-       {:user user
-        :result result
-        :view-state view-state}
-       (board-oob ctx view-state))))))
+     (with-board-state-oob
+       (views/reset-demo-result
+        ctx
+        (merge
+         {:user user
+          :result result
+          :view-state view-state}
+         (board-oob ctx view-state)))
+       view-state))))
 
 ;; -----------------------------------------------------------------------------
 ;; Module
