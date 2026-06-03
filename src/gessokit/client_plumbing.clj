@@ -14,6 +14,7 @@
    Feature-specific notification wording belongs in feature namespaces, e.g.
    gessokit.humanhelp.live."
   (:require
+   [clojure.string :as str]
    [gesso.core :as g]
    [gesso.live.client :as live-client]
    [gessokit.middleware :as mid]))
@@ -48,11 +49,23 @@
 ;; App identity
 ;; -----------------------------------------------------------------------------
 
+(defn emailish?
+  "True when x looks like an email address.
+
+   This is intentionally lightweight. It is not a validator; it only keeps
+   display-email helpers from preferring UUID/session ids over actual emails."
+  [x]
+  (and (string? x)
+       (str/includes? x "@")))
+
 (defn current-user-id
   "Return the app user id used for connected-client targeting.
 
    Biff auth usually gives us a session uid. We intentionally return a string
-   because client targeting keys should be stable and easy to serialize/log."
+   because client targeting keys should be stable and easy to serialize/log.
+
+   In very lightweight test/dev contexts, a session email may be the only
+   identity present, so it is accepted as a fallback before demo-user."
   [ctx]
   (str
    (or (:user/id ctx)
@@ -60,6 +73,7 @@
        (get-in ctx [:user :xt/id])
        (get-in ctx [:user :email])
        (get-in ctx [:session :uid])
+       (get-in ctx [:session :email])
        (get-in ctx [:session :user])
        "demo-user")))
 
@@ -67,15 +81,21 @@
   "Best-effort display email for app UI.
 
    This namespace does not query XTDB. If the surrounding app wants an exact
-   email address, it can attach it to ctx before rendering."
+   email address, it can attach it to ctx before rendering.
+
+   Prefer email-looking values. Fall back to current-user-id only as a final
+   generic display value."
   [ctx]
-  (str
-   (or (:user/email ctx)
-       (get-in ctx [:user :email])
-       (get-in ctx [:session :email])
-       (get-in ctx [:params :email])
-       (get-in ctx [:params "email"])
-       (current-user-id ctx))))
+  (or (some
+       (fn [x]
+         (when (emailish? x)
+           x))
+       [(:user/email ctx)
+        (get-in ctx [:user :email])
+        (get-in ctx [:session :email])
+        (get-in ctx [:params :email])
+        (get-in ctx [:params "email"])])
+      (current-user-id ctx)))
 
 (defn current-client
   "Return the app-defined client descriptor for this connected browser.

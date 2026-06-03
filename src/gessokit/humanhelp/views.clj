@@ -16,9 +16,7 @@
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.domain :as domain]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.ui :as ui])
-  (:import
-   [java.net URLEncoder]))
+   [gessokit.ui :as ui]))
 
 ;; -----------------------------------------------------------------------------
 ;; DOM ids shared with live.clj
@@ -40,13 +38,6 @@
   "humanhelp-board-state")
 
 ;; -----------------------------------------------------------------------------
-;; Forward declarations
-;; -----------------------------------------------------------------------------
-
-(declare search-control)
-(declare create-request-dialog)
-
-;; -----------------------------------------------------------------------------
 ;; Small helpers
 ;; -----------------------------------------------------------------------------
 
@@ -55,13 +46,6 @@
   (or (:user/email user)
       (:user/id user)
       "demo-user"))
-
-(defn user-display-name
-  [user]
-  (let [email (user-email user)]
-    (if (str/includes? email "@")
-      (first (str/split email #"@"))
-      email)))
 
 (defn status-label
   [request]
@@ -96,41 +80,17 @@
              :name name
              :value value}]))
 
-(defn route
-  [path]
-  (str routes/base-path path))
+(defn view-state-hidden-inputs
+  [{:keys [search selected-request-id visible-revision]}]
+  [:div {:style {:display "contents"}}
+   (hidden-input routes/search-param search)
+   (hidden-input routes/selected-param selected-request-id)
+   (hidden-input routes/visible-revision-param visible-revision)])
 
-(defn encode
-  [x]
-  (URLEncoder/encode (str x) "UTF-8"))
-
-(defn q
-  [params]
-  (let [pairs (for [[k v] params
-                    :when (some? v)
-                    :let [s (str v)]
-                    :when (not (str/blank? s))]
-                (str (encode (name k))
-                     "="
-                     (encode s)))]
-    (when (seq pairs)
-      (str "?" (str/join "&" pairs)))))
-
-(defn with-query
-  [path params]
-  (str path (or (q params) "")))
-
-(defn visible-revision
-  [view-state]
-  (:visible-revision view-state))
-
-(defn selected-request-id
-  [view-state]
-  (:selected-request-id view-state))
-
-(defn search-value
-  [view-state]
-  (or (:search view-state) ""))
+(defn oob-response
+  [& nodes]
+  (into [:div {:style {:display "contents"}}]
+        (remove nil? nodes)))
 
 (defn attr-style-control
   []
@@ -146,7 +106,43 @@
    text])
 
 ;; -----------------------------------------------------------------------------
-;; Brand / top bar
+;; Form/action helpers
+;; -----------------------------------------------------------------------------
+
+(defn form-action
+  [ctx {:keys [to text variant size view-state attrs]}]
+  [:form
+   (merge
+    {:method "post"
+     :hx-post to
+     :hx-swap "none"
+     :class "inline-flex"}
+    attrs)
+   (g/anti-forgery-input ctx)
+   (view-state-hidden-inputs view-state)
+   (g/button
+    {:variant (or variant :default)
+     :size (or size :sm)
+     :text text
+     :attrs {:type "submit"}})])
+
+(defn action-button
+  [ctx request user action view-state]
+  (form-action
+   ctx
+   {:to (routes/action-url (:request/id request) action)
+    :text (domain/action-label action)
+    :variant (case action
+               :done :primary
+               :claim :primary
+               :take-over :primary
+               :cancel :outline
+               :unclaim :outline
+               :default)
+    :view-state view-state}))
+
+;; -----------------------------------------------------------------------------
+;; App bar
 ;; -----------------------------------------------------------------------------
 
 (defn brand
@@ -159,27 +155,44 @@
    [:span {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme"}
     "Human Help"]])
 
-(defn account-dropdown
-  [user]
-  (g/dropdown-menu
-   {}
-   (g/dropdown-menu-trigger
-    {:class "inline-flex max-w-[22rem] items-center justify-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
-     :attrs {:aria-label "Account menu"}}
-    [:span {:class "truncate"}
-     (user-email user)]
-    [:span {:aria-hidden "true"
-            :style {:color "var(--muted-foreground)"}}
-     "▾"])
+(defn logout-form
+  []
+  [:form {:method "post"
+          :action "/auth/signout"}
+   [:button {:type "submit"
+             :class "w-full text-left font-body text-sm-theme leading-body"
+             :style {:color "var(--foreground)"
+                     :background "transparent"
+                     :border "0"
+                     :padding "0"}}
+    "Log out"]])
 
-   (g/dropdown-menu-content
-    {:align :end}
-    (g/dropdown-menu-label
-     {:text (user-email user)})
-    (g/dropdown-menu-separator)
-    (g/dropdown-menu-item
-     {:attrs {:onclick "window.location.href='/auth/signout'"}}
-     [:span "Log out"]))))
+(defn user-menu
+  [user]
+  [:details {:class "relative"}
+   [:summary {:class "inline-flex cursor-pointer list-none items-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
+              :style {:border-style "solid"
+                      :border-color "var(--border)"
+                      :background "var(--card)"
+                      :color "var(--card-foreground)"}}
+    [:span {:class "truncate max-w-[18rem]"}
+     (user-email user)]
+    (g/icon "chevron-down" {:size :sm})]
+
+   [:div {:class "absolute right-0 z-50 mt-2 min-w-56 radius-md border-theme pad-panel shadow-lg"
+          :style {:border-style "solid"
+                  :border-color "var(--border)"
+                  :background "var(--popover, var(--card))"
+                  :color "var(--popover-foreground, var(--card-foreground))"}}
+    [:div {:class "content-stack-theme"}
+     [:div {:class "font-body text-xs-theme leading-body"
+            :style {:color "var(--muted-foreground)"}}
+      "Signed in as"]
+     [:div {:class "font-body text-sm-theme leading-body weight-medium-theme break-all"}
+      (user-email user)]
+     [:div {:class "border-t border-theme"
+            :style {:border-color "var(--border)"}}]
+     (logout-form)]]])
 
 (defn app-bar
   [ctx user]
@@ -205,7 +218,11 @@
            :class "min-w-0"}
      [:div {:class "cluster-theme items-center justify-end"}
       (ui/theme-dialog ctx {:trigger-label? false})
-      (account-dropdown user)]]]])
+      (user-menu user)]]]])
+
+;; -----------------------------------------------------------------------------
+;; Page shell bits
+;; -----------------------------------------------------------------------------
 
 (defn hero
   []
@@ -214,269 +231,235 @@
     "Welcome to Human Help."]])
 
 ;; -----------------------------------------------------------------------------
-;; Request board state / search
+;; Request toolbar
 ;; -----------------------------------------------------------------------------
 
-(defn search-url
-  [view-state]
-  (with-query
-    (route routes/search-requests-route)
-    {:visible-revision (visible-revision view-state)}))
+(defn refresh-button-class
+  [stale?]
+  (str "inline-flex items-center justify-center gap-inline control-theme radius-md border-theme "
+       "font-body text-sm-theme weight-medium-theme "
+       (when stale? "shadow-lg")))
+
+(defn refresh-button-style
+  [stale?]
+  (if stale?
+    {:border-style "solid"
+     :border-color "var(--primary)"
+     :background "var(--primary)"
+     :color "var(--primary-foreground)"}
+    {:border-style "solid"
+     :border-color "var(--border)"
+     :background "var(--card)"
+     :color "var(--card-foreground)"}))
+
+(defn refresh-form
+  [ctx view-state stale?]
+  [:form {:method "post"
+          :hx-post (routes/refresh-requests-url view-state)
+          :hx-swap "none"
+          :class "inline-flex"}
+   (g/anti-forgery-input ctx)
+   (view-state-hidden-inputs view-state)
+   [:button {:type "submit"
+             :class (refresh-button-class stale?)
+             :style (refresh-button-style stale?)}
+    "Refresh"]])
+
+(defn request-toolbar-fragment
+  [{:keys [ctx
+           view-state
+           open-count
+           pending-open-count
+           stale?
+           latest-revision]}]
+  (let [view-state (or view-state {})
+        stale?     (boolean stale?)]
+    [:div {:id request-toolbar-dom-id
+           :data-humanhelp-fragment "request-toolbar"
+           :data-latest-revision latest-revision
+           :class "content-stack-theme"}
+     [:div {:class "toolbar-theme justify-between"}
+      [:div {:class "cluster-theme items-center"}
+       [:div {:class "title-stack-theme gap-field"}
+        [:h2 {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"}
+         "Requests"]
+        [:div {:class "cluster-theme items-center"}
+         (g/status-pill
+          {:status (if (pos? (or open-count 0)) :active :muted)
+           :dot? true
+           :text "Open"})
+
+         [:span {:class "font-body text-sm-theme leading-body"
+                 :style {:color "var(--muted-foreground)"}}
+          (str (or open-count 0) " open")]
+
+         (when (pos? (or pending-open-count 0))
+           (g/badge
+            {:variant :secondary
+             :text (str "+" pending-open-count " new")}))]]]
+
+      [:div {:class "cluster-theme items-center justify-end"}
+       (refresh-form ctx view-state stale?)
+
+       [:button {:type "button"
+                 :aria-label "Create request"
+                 :class "btn-primary"
+                 :onclick (str "document.getElementById('"
+                               create-request-dialog-id
+                               "').showModal()")}
+        "+"]]]
+
+     (when stale?
+       (muted "New request data is available. Refresh when you are ready."))]))
+
+;; -----------------------------------------------------------------------------
+;; Search
+;; -----------------------------------------------------------------------------
 
 (defn search-control
   [{:keys [view-state]}]
-  [:form {:id board-state-form-id
-          :method "get"
-          :hx-get (search-url view-state)
-          :hx-target (str "#" request-list-dom-id)
-          :hx-swap "outerHTML"
-          :hx-trigger "keyup changed delay:250ms from:#humanhelp-search, search from:#humanhelp-search"
-          :class "content-stack-theme"}
-   (hidden-input "visible-revision" (visible-revision view-state))
-   (sr-only-label "humanhelp-search" "Search requests")
+  (let [view-state (or view-state {})]
+    [:form {:id board-state-form-id
+            :method "get"
+            :hx-get (routes/search-requests-url view-state)
+            :hx-target (str "#" request-list-dom-id)
+            :hx-swap "outerHTML"
+            :hx-trigger "keyup changed delay:250ms from:#humanhelp-search, search from:#humanhelp-search"
+            :class "content-stack-theme"}
+     (view-state-hidden-inputs view-state)
+     (sr-only-label "humanhelp-search" "Search requests")
 
-   [:div {:class "relative"}
-    [:span {:class "absolute left-3 top-1/2 -translate-y-1/2"
-            :style {:color "var(--muted-foreground)"}}
-     (g/icon "search" {:size :sm})]
+     [:div {:class "relative"}
+      [:span {:class "absolute left-3 top-1/2 -translate-y-1/2"
+              :style {:color "var(--muted-foreground)"}}
+       (g/icon "search" {:size :sm})]
 
-    [:input {:type "search"
-             :id "humanhelp-search"
-             :name "q"
-             :value (search-value view-state)
-             :placeholder "Search by person, request, area, or status"
-             :class "control-theme radius-lg border-theme font-body text-base-theme w-full"
-             :style (assoc (attr-style-control)
-                           :padding-left "2.5rem")}]]])
-
-;; -----------------------------------------------------------------------------
-;; Request toolbar fragment
-;; -----------------------------------------------------------------------------
-
-(defn request-toolbar-fragment
-  [{:keys [view-state latest-revision visible-revision stale? open-count pending-open-count]}]
-  [:div {:id request-toolbar-dom-id
-         :class "content-stack-theme"}
-   [:div {:class "toolbar-theme justify-between"}
-    [:div {:class "cluster-theme items-center"}
-     (g/status-pill
-      {:status (if (pos? open-count) :active :muted)
-       :dot? true
-       :text (str open-count " open")})
-
-     (when (pos? pending-open-count)
-       (g/badge
-        {:variant :secondary
-         :text (str pending-open-count " new")}))
-
-     (when stale?
-       (g/badge
-        {:variant :outline
-         :text "New data available"}))]
-
-    [:div {:class "cluster-theme items-center justify-end"}
-     (when stale?
-       [:form {:method "post"
-               :hx-post (route routes/refresh-requests-route)
-               :hx-target "body"
-               :hx-swap "beforeend"
-               :class "inline-flex"}
-        (hidden-input "visible-revision" latest-revision)
-        (hidden-input "q" (search-value view-state))
-        (g/button
-         {:variant :primary
-          :size :sm
-          :text "Refresh"
-          :attrs {:type "submit"}})])
-
-     [:button {:type "button"
-               :class "btn-primary"
-               :onclick (str "document.getElementById('"
-                             create-request-dialog-id
-                             "').showModal()")}
-      "Create request"]]]
-
-   (when stale?
-     (muted
-      (str "Your board is pinned at revision "
-           visible-revision
-           ". Refresh to include newer requests.")))])
+      [:input {:type "search"
+               :id "humanhelp-search"
+               :name routes/search-param
+               :value (or (:search view-state) "")
+               :placeholder "Search by person, request, area, or status"
+               :class "control-theme radius-lg border-theme font-body text-base-theme w-full"
+               :style (assoc (attr-style-control)
+                             :padding-left "2.5rem")}]]]))
 
 ;; -----------------------------------------------------------------------------
-;; Request cards / actions
+;; Request cards
 ;; -----------------------------------------------------------------------------
 
-(defn action-url
-  [request action]
-  (let [id (:request/id request)]
-    (case action
-      :claim
-      (route (str "/requests/" id "/claim"))
-
-      :unclaim
-      (route (str "/requests/" id "/unclaim"))
-
-      :take-over
-      (route (str "/requests/" id "/take-over"))
-
-      :done
-      (route (str "/requests/" id "/done"))
-
-      :cancel
-      (route (str "/requests/" id "/cancel"))
-
-      (route (str "/requests/" id "/" (name action))))))
-
-(defn select-url
+(defn card-selected?
   [request view-state]
-  (with-query
-    (route (str "/requests/" (:request/id request) "/select"))
-    {:visible-revision (visible-revision view-state)
-     :q (search-value view-state)
-     :selected (:request/id request)}))
+  (= (:request/id request)
+     (:selected-request-id view-state)))
 
-(defn action-variant
-  [action]
-  (case action
-    :claim :primary
-    :take-over :primary
-    :done :primary
-    :unclaim :outline
-    :cancel :outline
-    :outline))
+(defn request-card-style
+  [selected?]
+  {:border-style "solid"
+   :border-color (if selected?
+                   "var(--primary)"
+                   "var(--border)")
+   :background "var(--background)"
+   :color "var(--foreground)"
+   :box-shadow (when selected?
+                 "0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent)")})
 
-(defn action-button
-  [ctx request action view-state]
-  [:form {:method "post"
-          :hx-post (action-url request action)
-          :hx-target "body"
-          :hx-swap "beforeend"
-          :hx-sync "closest [data-humanhelp-request-card]:drop"
-          :class "inline-flex"}
-   (g/anti-forgery-input ctx)
-   (hidden-input "visible-revision" (visible-revision view-state))
-   (hidden-input "q" (search-value view-state))
-   (hidden-input "selected" (selected-request-id view-state))
+(defn request-meta
+  [request]
+  [:div {:class "cluster-theme items-center"}
+   (request-status-pill request)
 
-   (g/button
-    {:variant (action-variant action)
-     :size :sm
-     :text (domain/action-label action)
-     :attrs {:type "submit"}})])
+   [:span {:class "font-body text-xs-theme"
+           :style {:color "var(--muted-foreground)"}}
+    (:request/area request)]
 
-(defn request-actions
+   [:span {:class "font-body text-xs-theme"
+           :style {:color "var(--muted-foreground)"}}
+    "·"]
+
+   [:span {:class "font-body text-xs-theme"
+           :style {:color "var(--muted-foreground)"}}
+    "waiting "
+    (domain/waiting-label request)]])
+
+(defn request-card-actions
   [ctx request user view-state]
   (let [actions (domain/available-actions request user)]
-    (if (seq actions)
+    (when (seq actions)
       (into
        [:div {:class "cluster-theme items-center justify-end"}]
-       (map #(action-button ctx request % view-state))
-       actions)
-
-      [:div {:class "cluster-theme items-center justify-end"}
-       (g/badge
-        {:variant :outline
-         :text "No actions"})])))
-
-(defn request-metadata
-  [request]
-  (str "Request #"
-       (:request/number request)
-       " · "
-       (:request/customer-name request)
-       " · "
-       (:request/area request)
-       " · "
-       (domain/waiting-label request)
-       " ago"))
+       (map #(action-button ctx request user % view-state))
+       actions))))
 
 (defn request-card
-  [{:keys [ctx user view-state selected? request]}]
-  [:article {:id (str "request-" (:request/id request))
-             :data-humanhelp-request-card true
-             :class "radius-xl border-theme pad-panel content-stack-theme shadow-sm"
-             :style {:border-style "solid"
-                     :border-color (if selected?
-                                     "var(--ring)"
-                                     "var(--border)")
-                     :background "var(--card)"
-                     :color "var(--card-foreground)"}}
-   [:div {:class "toolbar-theme justify-between"}
-    [:div {:class "title-stack-theme"}
-     [:div {:class "cluster-theme items-center"}
-      (request-status-pill request)
+  [ctx {:keys [request user view-state]}]
+  (let [selected? (card-selected? request view-state)]
+    [:article {:id (str "humanhelp-request-" (:request/id request))
+               :data-humanhelp-request-card true
+               :class "radius-xl border-theme pad-card content-stack-theme transition-all"
+               :style (request-card-style selected?)}
+     [:a {:href (if selected?
+                  (routes/clear-selection-url view-state)
+                  (routes/select-request-url (:request/id request) view-state))
+          :hx-get (if selected?
+                    (routes/clear-selection-url view-state)
+                    (routes/select-request-url (:request/id request) view-state))
+          :hx-target (str "#" request-list-dom-id)
+          :hx-swap "outerHTML"
+          :class "block content-stack-theme"
+          :style {:color "inherit"
+                  :text-decoration "none"}}
+      [:div {:class "cluster-theme items-start justify-between"}
+       [:div {:class "content-stack-theme gap-field"}
+        [:h3 {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"}
+         (:request/title request)]
+        (request-meta request)]
+       (g/icon (if selected? "chevron-up" "chevron-down")
+               {:size :sm})]
 
-      (when-let [claimed-by (:request/claimed-by-email request)]
-        (g/badge
-         {:variant :outline
-          :text (str "Claimed by " claimed-by)}))]
+      [:div {:class "cluster-theme items-center"}
+       [:span {:class "font-body text-sm-theme leading-body weight-medium-theme"}
+        (:request/customer-name request)]
 
-     [:h2 {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"}
-      (:request/title request)]
+       (when-let [claimed-by (:request/claimed-by-email request)]
+         [:span {:class "font-body text-xs-theme leading-body"
+                 :style {:color "var(--muted-foreground)"}}
+          "claimed by "
+          claimed-by])]]
 
-     [:p {:class "font-body text-sm-theme leading-body"
-          :style {:color "var(--muted-foreground)"}}
-      (request-metadata request)]]
+     (when selected?
+       [:div {:class "content-stack-theme"}
+        (when (domain/present? (:request/details request))
+          [:p {:class "font-body text-sm-theme leading-body"}
+           (:request/details request)])
 
-    [:a {:href (select-url request view-state)
-         :hx-get (select-url request view-state)
-         :hx-target (str "#" request-list-dom-id)
-         :hx-swap "outerHTML"
-         :class "font-body text-sm-theme"
-         :style {:color "var(--primary)"
-                 :text-decoration "none"}}
-     (if selected? "Collapse" "Details")]]
+        (request-card-actions ctx request user view-state)])]))
 
-   (when (or selected?
-             (seq (:request/details request)))
-     [:div {:class "content-stack-theme"}
-      (when (seq (:request/details request))
-        [:p {:class "font-body text-sm-theme leading-body"}
-         (:request/details request)])
-
-      (when selected?
-        [:div {:class "radius-md pad-row"
-               :style {:background "var(--muted)"}}
-         [:p {:class "font-body text-sm-theme leading-body"
-              :style {:color "var(--muted-foreground)"}}
-          "This expanded state is driven by normal request params and fragment rendering."]])])
-
-   (request-actions ctx request user view-state)])
-
-(defn request-list-empty
+(defn empty-request-list
   [{:keys [view-state]}]
-  (let [search (search-value view-state)]
-    (g/empty-state
-     {:icon (g/empty-state-icon)
-      :title (if (str/blank? search)
-               "No requests yet"
-               "No matching requests")
-      :description (if (str/blank? search)
-                     "Create a request to see the live board update."
-                     "Try a broader search, or clear the search field.")})))
+  (g/empty-state
+   {:title (if (domain/present? (:search view-state))
+             "No matching requests"
+             "No requests yet")
+    :description (if (domain/present? (:search view-state))
+                   "Try fewer words or a different person, area, request, or status."
+                   "Create a request with the plus button to start the demo.")
+    :icon (g/empty-state-icon)}))
 
 (defn request-list-fragment
-  [{:keys [ctx user view-state requests stale?] :as data}]
+  [{:keys [ctx user view-state requests latest-revision]}]
   [:div {:id request-list-dom-id
+         :data-humanhelp-fragment "request-list"
+         :data-latest-revision latest-revision
          :class "content-stack-theme"}
-   (when stale?
-     [:div {:class "radius-lg border-theme pad-panel"
-            :style {:border-style "solid"
-                    :border-color "var(--border)"
-                    :background "var(--muted)"}}
-      (muted "New requests are available. Use Refresh to commit them into this visible board.")])
-
    (if (seq requests)
-     [:div {:class "list-theme"}
+     [:div {:class "content-stack-theme"}
       (for [request requests]
         (request-card
-         {:ctx ctx
+         ctx
+         {:request request
           :user user
-          :view-state view-state
-          :request request
-          :selected? (= (:request/id request)
-                        (selected-request-id view-state))}))]
-     (request-list-empty data))])
+          :view-state view-state}))]
+     (empty-request-list {:view-state view-state}))])
 
 ;; -----------------------------------------------------------------------------
 ;; Create request dialog
@@ -489,130 +472,106 @@
          :style {:color "var(--destructive)"}}
      error]))
 
-(defn input-label
-  [text]
-  [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
-   text])
-
-(defn text-input
-  [{:keys [name value placeholder type]}]
-  [:input {:name name
-           :type (or type "text")
-           :value (or value "")
-           :placeholder placeholder
-           :class "control-theme radius-md border-theme font-body text-sm-theme"
-           :style (attr-style-control)}])
-
-(defn create-request-form
+(defn create-request-dialog-content
   [ctx {:keys [user values errors]}]
   (let [values (or values {})
         errors (or errors {})]
-    [:form {:method "post"
-            :hx-post (route routes/create-request-route)
-            :hx-swap "none"
-            :class "form-theme"}
-     (g/anti-forgery-input ctx)
+    [:div {:id create-request-dialog-body-id
+           :class "pad-card content-stack-theme"}
+     [:div {:class "title-stack-theme"}
+      [:h2 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-bold-theme"}
+       "Create request"]
 
-     [:label {:class "content-stack-theme gap-field"}
-      (input-label "Your name")
-      (text-input
-       {:name "customer-name"
-        :value (or (:customer-name values)
-                   (user-display-name user))
-        :placeholder "Avery"})
-      (field-error errors :customer-name)]
+      [:p {:class "font-body text-sm-theme leading-body"
+           :style {:color "var(--muted-foreground)"}}
+       "Everyone can make and service requests in this Human Help analogue."]]
 
-     [:label {:class "content-stack-theme gap-field"}
-      (input-label "Area")
-      (text-input
-       {:name "area"
-        :value (:area values)
-        :placeholder "Garden"})
-      (field-error errors :area)]
+     [:form {:method "post"
+             :hx-post (routes/create-request-url)
+             :hx-swap "none"
+             :class "form-theme"}
+      (g/anti-forgery-input ctx)
 
-     [:label {:class "content-stack-theme gap-field"}
-      (input-label "Request")
-      (text-input
-       {:name "title"
-        :value (:title values)
-        :placeholder "Need help finding a rake"})
-      (field-error errors :title)]
+      [:label {:class "content-stack-theme gap-field"}
+       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
+        "Your name"]
+       [:input {:name "customer-name"
+                :value (or (:customer-name values)
+                           (user-email user))
+                :class "control-theme radius-md border-theme font-body text-sm-theme"
+                :style (attr-style-control)}]
+       (field-error errors :customer-name)]
 
-     [:label {:class "content-stack-theme gap-field"}
-      (input-label "Details")
-      [:textarea {:name "details"
-                  :rows 4
-                  :placeholder "Add item, aisle, or context."
-                  :class "control-theme radius-md border-theme font-body text-sm-theme"
-                  :style (attr-style-control)}
-       (or (:details values) "")]
-      (field-error errors :details)]
+      [:label {:class "content-stack-theme gap-field"}
+       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
+        "Area"]
+       [:input {:name "area"
+                :value (or (:area values) "")
+                :placeholder "Garden"
+                :class "control-theme radius-md border-theme font-body text-sm-theme"
+                :style (attr-style-control)}]
+       (field-error errors :area)]
 
-     [:div {:class "cluster-theme justify-end"}
-      [:button {:type "button"
-                :onclick (str "document.getElementById('"
-                              create-request-dialog-id
-                              "').close()")
-                :class "btn-outline"}
-       "Cancel"]
+      [:label {:class "content-stack-theme gap-field"}
+       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
+        "Request"]
+       [:input {:name "title"
+                :value (or (:title values) "")
+                :placeholder "Need help finding a rake"
+                :class "control-theme radius-md border-theme font-body text-sm-theme"
+                :style (attr-style-control)}]
+       (field-error errors :title)]
 
-      [:button {:type "submit"
-                :class "btn-primary"}
-       "Create"]]]))
+      [:label {:class "content-stack-theme gap-field"}
+       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
+        "Details"]
+       [:textarea {:name "details"
+                   :rows 4
+                   :placeholder "Add item, aisle, or context."
+                   :class "control-theme radius-md border-theme font-body text-sm-theme"
+                   :style (attr-style-control)}
+        (or (:details values) "")]
+       (field-error errors :details)]
 
-(defn create-request-dialog-body
-  [ctx {:keys [user values errors open?]}]
-  [:div {:id create-request-dialog-body-id
-         :class "pad-card content-stack-theme"}
-   [:div {:class "title-stack-theme"}
-    [:h2 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-bold-theme"}
-     "Create request"]
-
-    [:p {:class "font-body text-sm-theme leading-body"
-         :style {:color "var(--muted-foreground)"}}
-     "Everyone can make and service requests in this Human Help analogue."]]
-
-   (when (seq errors)
-     (g/alert
-      {:variant :destructive
-       :title "Check the request"
-       :content "Fix the highlighted fields and try again."}))
-
-   (create-request-form
-    ctx
-    {:user user
-     :values values
-     :errors errors
-     :open? open?})])
+      [:div {:class "cluster-theme justify-end"}
+       (g/button
+        {:variant :outline
+         :text "Cancel"
+         :attrs {:type "button"
+                 :onclick (str "document.getElementById('"
+                               create-request-dialog-id
+                               "').close()")}})
+       (g/button
+        {:variant :primary
+         :text "Create"
+         :attrs {:type "submit"}})]]]))
 
 (defn create-request-dialog
-  [ctx {:keys [user values errors open?]}]
-  [:dialog {:id create-request-dialog-id
-            :class "radius-xl border-theme shadow-xl"
-            :open (when open? true)
-            :style {:border-style "solid"
-                    :border-color "var(--border)"
-                    :background "var(--card)"
-                    :color "var(--card-foreground)"
-                    :max-width "min(34rem, calc(100vw - 2rem))"
-                    :width "100%"
-                    :padding "0"}}
-   (create-request-dialog-body
-    ctx
-    {:user user
-     :values (or values {})
-     :errors (or errors {})
-     :open? open?})])
+  [ctx {:keys [open?] :as opts}]
+  [:dialog (cond-> {:id create-request-dialog-id
+                    :class "radius-xl border-theme shadow-xl"
+                    :style {:border-style "solid"
+                            :border-color "var(--border)"
+                            :background "var(--card)"
+                            :color "var(--card-foreground)"
+                            :max-width "min(34rem, calc(100vw - 2rem))"
+                            :width "100%"
+                            :padding "0"}}
+             open? (assoc :open true))
+   (create-request-dialog-content ctx opts)])
 
 ;; -----------------------------------------------------------------------------
 ;; Page
 ;; -----------------------------------------------------------------------------
 
 (defn page
-  "Render /app."
-  [ctx {:keys [user view-state request-toolbar-panel request-list-panel]}]
+  [ctx {:keys [user
+               view-state
+               request-toolbar-panel
+               request-list-panel]}]
   (ui/page-shell
    ctx
+
    (client-plumbing/listener ctx)
 
    [:div {:class "relative isolate min-h-screen"
@@ -647,20 +606,8 @@
         :open? false})]]]))
 
 ;; -----------------------------------------------------------------------------
-;; OOB helpers
+;; OOB / action result views
 ;; -----------------------------------------------------------------------------
-
-(defn close-dialog-oob
-  []
-  [:div {:hx-swap-oob "beforeend:body"}
-   [:script
-    (str "document.getElementById('"
-         create-request-dialog-id
-         "')?.close();")]])
-
-(defn replace-dialog-body-oob
-  [body]
-  (g/oob-outer-html create-request-dialog-body-id body))
 
 (defn replace-toolbar-oob
   [toolbar]
@@ -670,17 +617,17 @@
   [request-list]
   (g/oob-outer-html request-list-dom-id request-list))
 
+(defn replace-dialog-oob
+  [dialog]
+  (g/oob-outer-html create-request-dialog-id dialog))
+
 (defn fragments-oob
   [{:keys [toolbar request-list]}]
-  [:<>
+  (oob-response
    (when toolbar
      (replace-toolbar-oob toolbar))
    (when request-list
-     (replace-request-list-oob request-list))])
-
-;; -----------------------------------------------------------------------------
-;; Create request responses
-;; -----------------------------------------------------------------------------
+     (replace-request-list-oob request-list))))
 
 (defn create-request-dialog-fragment
   [ctx {:keys [user values errors open?]}]
@@ -693,8 +640,8 @@
 
 (defn create-request-validation-error
   [ctx {:keys [user values errors]}]
-  (replace-dialog-body-oob
-   (create-request-dialog-body
+  (replace-dialog-oob
+   (create-request-dialog
     ctx
     {:user user
      :values values
@@ -702,22 +649,26 @@
      :open? true})))
 
 (defn create-request-success
-  [_ctx {:keys [request toolbar request-list]}]
-  [:<>
-   (close-dialog-oob)
+  [ctx {:keys [user request toolbar request-list]}]
+  (oob-response
+   (replace-dialog-oob
+    (create-request-dialog
+     ctx
+     {:user user
+      :values {}
+      :errors {}
+      :open? false}))
    (fragments-oob
     {:toolbar toolbar
      :request-list request-list})
    (g/render-toast-oob
     {:variant :success
      :title "Request created"
-     :description (str "Request #"
-                       (:request/number request)
-                       " is now on the board.")})])
-
-;; -----------------------------------------------------------------------------
-;; Request-board interaction responses
-;; -----------------------------------------------------------------------------
+     :description (if request
+                    (str "Request #"
+                         (:request/number request)
+                         " is now on the board.")
+                    "The request is now on the board.")})))
 
 (defn refreshed-request-board-fragments
   [_ctx {:keys [toolbar request-list]}]
@@ -727,31 +678,33 @@
 
 (defn request-lifecycle-result
   [_ctx {:keys [action request toolbar request-list]}]
-  [:<>
+  (oob-response
    (fragments-oob
     {:toolbar toolbar
      :request-list request-list})
-   (g/render-toast-oob
-    {:variant :success
-     :title (domain/action-label action)
-     :description (domain/action-result-message action request)})])
+   (when (and action request)
+     (g/render-toast-oob
+      {:variant :success
+       :title (domain/action-label action)
+       :description (domain/action-result-message action request)}))))
 
 (defn request-action-error
-  [_ctx {:keys [action result request-id]}]
+  [_ctx {:keys [result]}]
   (g/render-toast-oob
    {:variant :danger
-    :title (str "Could not " (str/lower-case (domain/action-label action)))
-    :description (or (:message result)
+    :title "Request not updated"
+    :description (or (get-in result [:error :message])
+                     (:message result)
                      (:reason result)
-                     (str "Request " request-id " could not be updated."))}))
+                     "That request action could not be completed.")}))
 
 (defn reset-demo-result
   [_ctx {:keys [toolbar request-list]}]
-  [:<>
+  (oob-response
    (fragments-oob
     {:toolbar toolbar
      :request-list request-list})
    (g/render-toast-oob
     {:variant :info
      :title "Demo reset"
-     :description "The Human Help demo state was reset."})])
+     :description "The Human Help request board was reset."})))

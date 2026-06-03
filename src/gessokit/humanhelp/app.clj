@@ -12,6 +12,7 @@
    The Human Help feature code is isolated under gessokit.humanhelp.* so the
    example app can be removed cleanly from a generated template project."
   (:require
+   [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.domain :as domain]
@@ -19,7 +20,9 @@
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
    [gessokit.humanhelp.views :as views]
-   [gessokit.middleware :as mid]))
+   [gessokit.middleware :as mid])
+  (:import
+   [java.util UUID]))
 
 ;; -----------------------------------------------------------------------------
 ;; Request helpers
@@ -43,15 +46,102 @@
   [ctx]
   (param ctx :request-id))
 
+;; -----------------------------------------------------------------------------
+;; Current user
+;; -----------------------------------------------------------------------------
+
+(defn session-uid
+  "Return the signed-in user's session id, when present.
+
+   Biff auth commonly stores the user id at [:session :uid]. Other keys are
+   included as tolerant fallbacks for tests/dev middleware."
+  [ctx]
+  (or (get-in ctx [:session :uid])
+      (get-in ctx [:session :user])
+      (:user/id ctx)
+      (get-in ctx [:user :xt/id])))
+
+(defn ->uuid
+  [x]
+  (cond
+    (uuid? x)
+    x
+
+    (string? x)
+    (try
+      (UUID/fromString x)
+      (catch Exception _
+        nil))
+
+    :else
+    nil))
+
+(defn emailish?
+  "True when x looks like a displayable email address rather than a UUID/id.
+
+   This is intentionally lightweight. It is not a full email validator; it just
+   prevents UUID/session ids from being used as display emails when a real email
+   is available elsewhere."
+  [x]
+  (and (string? x)
+       (re-find #"@" x)))
+
+(defn user-email-from-ctx
+  "Return a directly attached email from ctx, when one is present.
+
+   These keys cover tests, dev middleware, and common app/user shapes."
+  [ctx]
+  (some
+   #(when (emailish? %)
+      %)
+   [(:user/email ctx)
+    (:user/email (:user ctx))
+    (get-in ctx [:user :email])
+    (get-in ctx [:session :email])
+    (get-in ctx [:identity :email])
+    (get-in ctx [:params :email])
+    (get-in ctx [:params "email"])]))
+
+(defn user-email-from-db
+  "Look up the signed-in user's real email address from XTDB.
+
+   client-plumbing/current-user-email is intentionally a generic best-effort
+   helper. Human Help wants the actual user email for display, so this boundary
+   resolves it from the app's :user table when possible."
+  [ctx]
+  (let [conn (:biff/conn ctx)
+        uid  (->uuid (session-uid ctx))]
+    (when (and conn uid)
+      (try
+        (some-> (biffx/q conn
+                         {:select [:user/email]
+                          :from :user
+                          :where [:= :xt/id uid]})
+                first
+                :user/email)
+        (catch Exception _
+          nil)))))
+
+(defn current-user-email
+  "Return the email Human Help should display.
+
+   Prefer real email values from ctx/session/DB. Only fall back to the generic
+   client-plumbing display helper if no email can be found."
+  [ctx]
+  (or (user-email-from-ctx ctx)
+      (user-email-from-db ctx)
+      (client-plumbing/current-user-email ctx)))
+
 (defn current-user
   "Return the Human Help demo user descriptor.
 
    The demo intentionally does not enforce a real helper/helpee split, but it
-   still needs a stable user id/email for ownership, claim display, and OOB
-   client targeting."
+   still needs:
+   - a stable user id for ownership/client targeting
+   - the actual email for display and claim labels"
   [ctx]
   {:user/id (client-plumbing/current-user-id ctx)
-   :user/email (client-plumbing/current-user-email ctx)})
+   :user/email (current-user-email ctx)})
 
 (defn live-system
   [ctx]

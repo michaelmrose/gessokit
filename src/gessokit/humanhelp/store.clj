@@ -13,6 +13,7 @@
    The point is to make this namespace replaceable later with XTDB-backed
    persistence while keeping the rest of the app shape mostly intact."
   (:require
+   [clojure.string :as str]
    [gessokit.humanhelp.domain :as domain]))
 
 ;; -----------------------------------------------------------------------------
@@ -31,6 +32,14 @@
 ;; Seed data
 ;; -----------------------------------------------------------------------------
 
+(def seed-now-ms
+  "Fixed demo clock used only for seeded/reset state.
+
+   Keeping this fixed makes reset-demo-state! deterministic, which is useful for
+   tests and for reasoning about the demo store. Runtime-created requests and
+   lifecycle events still use domain/now-ms."
+  1780471110000)
+
 (defn seeded-request
   [{:keys [number
            title
@@ -43,30 +52,24 @@
            claimed-by-email
            created-offset-ms
            revision]}]
-  (let [now        (domain/now-ms)
-        created-at (- now (or created-offset-ms 0))
+  (let [created-at (- seed-now-ms (or created-offset-ms 0))
         id         (request-id number)
         revision'  (or revision number)]
-    (cond->
-     {:request/id id
-      :request/number number
-      :request/store-id domain/store-id
-      :request/title title
-      :request/area area
-      :request/details details
-      :request/customer-user-id customer-user-id
-      :request/customer-name customer-name
-      :request/status status
-      :request/created-at-ms created-at
-      :request/updated-at-ms created-at
-      :request/created-revision revision'
-      :request/updated-revision revision'}
-
-      claimed-by
-      (assoc :request/claimed-by claimed-by)
-
-      claimed-by-email
-      (assoc :request/claimed-by-email claimed-by-email))))
+    {:request/id id
+     :request/number number
+     :request/store-id domain/store-id
+     :request/title title
+     :request/area area
+     :request/details details
+     :request/customer-user-id customer-user-id
+     :request/customer-name customer-name
+     :request/status status
+     :request/claimed-by claimed-by
+     :request/claimed-by-email claimed-by-email
+     :request/created-at-ms created-at
+     :request/updated-at-ms created-at
+     :request/created-revision revision'
+     :request/updated-revision revision'}))
 
 (defn seeded-event
   [{:keys [number kind message request-id created-offset-ms revision]}]
@@ -74,7 +77,7 @@
    :event/kind kind
    :event/message message
    :event/request-id request-id
-   :event/at-ms (- (domain/now-ms) (or created-offset-ms 0))
+   :event/at-ms (- seed-now-ms (or created-offset-ms 0))
    :event/revision (or revision number)})
 
 (defn initial-state
@@ -87,6 +90,8 @@
              :customer-user-id "seed-user-1"
              :customer-name "Jon"
              :status :open
+             :claimed-by nil
+             :claimed-by-email nil
              :created-offset-ms (* 9 60000)
              :revision 1})
 
@@ -476,19 +481,38 @@
   []
   (latest-revision))
 
+(defn normalize-search
+  [search]
+  (let [search' (some-> search str str/trim)]
+    (if (str/blank? search')
+      ""
+      search')))
+
+(defn normalize-selected-request-id
+  [selected-request-id]
+  (let [selected' (some-> selected-request-id str str/trim)]
+    (when-not (str/blank? selected')
+      selected')))
+
 (defn normalize-view-state
   "Fill default view-state values from current store state.
 
    If :visible-revision is nil, it is set to the latest revision. This makes
    initial page loads stable while still allowing explicit older revisions to
-   represent a stale board."
-  [view-state]
-  (cond-> (or view-state {})
-    (nil? (:visible-revision view-state))
-    (assoc :visible-revision (initial-visible-revision))
+   represent a stale board.
 
-    (nil? (:search view-state))
-    (assoc :search "")))
+   Always returns a complete shape:
+     {:search ...
+      :selected-request-id ...
+      :visible-revision ...}"
+  [view-state]
+  (let [view-state' (or view-state {})]
+    {:search (normalize-search (:search view-state'))
+     :selected-request-id (normalize-selected-request-id
+                           (:selected-request-id view-state'))
+     :visible-revision (if (some? (:visible-revision view-state'))
+                         (:visible-revision view-state')
+                         (initial-visible-revision))}))
 
 (defn board-data
   "Return the data needed to render the request board for view-state."
