@@ -65,6 +65,7 @@
   {:biff/modules #'modules
    :biff/send-email #'email/send-email
    :biff/handler #'handler
+   :biff/malli-opts #'malli-opts
    :biff.beholder/on-save #'on-save
    :biff.middleware/on-error #'ui/on-error
    :biff.xtdb.listener/tables ["user" "msg"]

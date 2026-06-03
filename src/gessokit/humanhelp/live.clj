@@ -299,55 +299,74 @@
 ;; Change constructors
 ;; -----------------------------------------------------------------------------
 
+(defn- store-change-base
+  [topic]
+  {:topic topic
+
+   ;; Gesso Live's generic source/invalidation routing is keyed by :topic + :id.
+   ;; Keep :store/id as domain context, but also provide :id explicitly.
+   :id store-id
+   :store/id store-id})
+
 (defn request-created-change
   [{:keys [request revision actor]}]
-  {:topic :request/created
-   :store/id store-id
-   :request/id (:request/id request)
-   :request/number (:request/number request)
-   :request/status (:request/status request)
-   :revision revision
-   :actor/id (:user/id actor)
-   :actor/email (:user/email actor)})
+  (merge
+   (store-change-base :request/created)
+   {:request/id (:request/id request)
+    :request/number (:request/number request)
+    :request/status (:request/status request)
+    :revision revision
+    :actor/id (:user/id actor)
+    :actor/email (:user/email actor)}))
 
 (defn request-transition-topic
   [action]
   (case action
-    :claim :request/claimed
-    :unclaim :request/unclaimed
-    :take-over :request/taken-over
-    :done :request/done
-    :cancel :request/cancelled
+    :claim
+    :request/claimed
+
+    :unclaim
+    :request/unclaimed
+
+    :take-over
+    :request/taken-over
+
+    :done
+    :request/done
+
+    :cancel
+    :request/cancelled
+
     (throw
      (ex-info "Unknown Human Help request transition action."
               {:action action}))))
 
 (defn request-transition-change
   [{:keys [action request previous revision actor]}]
-  {:topic (request-transition-topic action)
-   :store/id store-id
-   :request/id (:request/id request)
-   :request/number (:request/number request)
-   :request/status (:request/status request)
-   :previous/status (:request/status previous)
-   :action action
-   :revision revision
-   :actor/id (:user/id actor)
-   :actor/email (:user/email actor)})
+  (merge
+   (store-change-base (request-transition-topic action))
+   {:request/id (:request/id request)
+    :request/number (:request/number request)
+    :request/status (:request/status request)
+    :previous/status (:request/status previous)
+    :action action
+    :revision revision
+    :actor/id (:user/id actor)
+    :actor/email (:user/email actor)}))
 
 (defn minute-tick-change
   []
-  {:topic :clock/minute
-   :store/id store-id
-   :at-ms (domain/now-ms)})
+  (merge
+   (store-change-base :clock/minute)
+   {:at-ms (domain/now-ms)}))
 
 (defn demo-reset-change
   [{:keys [revision actor]}]
-  {:topic :humanhelp-demo/reset
-   :store/id store-id
-   :revision revision
-   :actor/id (:user/id actor)
-   :actor/email (:user/email actor)})
+  (merge
+   (store-change-base :humanhelp-demo/reset)
+   {:revision revision
+    :actor/id (:user/id actor)
+    :actor/email (:user/email actor)}))
 
 ;; -----------------------------------------------------------------------------
 ;; Human Help page-global notifications

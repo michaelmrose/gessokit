@@ -582,41 +582,43 @@
      :revision"
   ([request action user]
    (transition-request request action user {}))
-  ([request action user {:keys [now-ms revision]}]
-   (if-let [error (transition-error request action user)]
-     {:status :error
-      :error error
-      :request request}
+  ([request action user opts]
+   (let [{supplied-now-ms :now-ms
+          revision :revision} opts]
+     (if-let [error (transition-error request action user)]
+       {:status :error
+        :error error
+        :request request}
 
-     (let [now-ms'   (or now-ms (now-ms))
-           revision' (or revision
-                         (:request/updated-revision request)
-                         (:request/created-revision request)
-                         0)
-           patch
-           (case action
-             :claim
-             (claim-fields user)
+       (let [now-ms'   (or supplied-now-ms (now-ms))
+             revision' (or revision
+                           (:request/updated-revision request)
+                           (:request/created-revision request)
+                           0)
+             patch
+             (case action
+               :claim
+               (claim-fields user)
 
-             :unclaim
-             (clear-claim-fields)
+               :unclaim
+               (clear-claim-fields)
 
-             :take-over
-             (claim-fields user)
+               :take-over
+               (claim-fields user)
 
-             :done
-             (terminal-fields :done)
+               :done
+               (terminal-fields :done)
 
-             :cancel
-             (terminal-fields :cancelled))
+               :cancel
+               (terminal-fields :cancelled))
 
-           request' (merge request
-                           patch
-                           {:request/updated-at-ms now-ms'
-                            :request/updated-revision revision'})]
-       {:status :ok
-        :previous request
-        :request request'}))))
+             request' (merge request
+                             patch
+                             {:request/updated-at-ms now-ms'
+                              :request/updated-revision revision'})]
+         {:status :ok
+          :previous request
+          :request request'})))))
 
 (defn action-label
   [action]
