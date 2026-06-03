@@ -31,7 +31,9 @@
 (defn param
   "Read a Ring/Biff request param by keyword or string key.
 
-   This stays in the HTTP boundary because it is a request-shape concern."
+   This stays in the HTTP boundary because it is a request-shape concern.
+
+   Supports plain Ring-style maps as well as common Reitit match placement."
   [ctx k]
   (or (get-in ctx [:params k])
       (get-in ctx [:params (name k)])
@@ -40,7 +42,9 @@
       (get-in ctx [:query-params k])
       (get-in ctx [:query-params (name k)])
       (get-in ctx [:path-params k])
-      (get-in ctx [:path-params (name k)])))
+      (get-in ctx [:path-params (name k)])
+      (get-in ctx [:reitit.core/match :path-params k])
+      (get-in ctx [:reitit.core/match :path-params (name k)])))
 
 (defn request-id
   [ctx]
@@ -92,8 +96,9 @@
    These keys cover tests, dev middleware, and common app/user shapes."
   [ctx]
   (some
-   #(when (emailish? %)
-      %)
+   (fn [x]
+     (when (emailish? x)
+       x))
    [(:user/email ctx)
     (:user/email (:user ctx))
     (get-in ctx [:user :email])
@@ -173,6 +178,74 @@
   (g/html-response node))
 
 ;; -----------------------------------------------------------------------------
+;; Stable live panels
+;; -----------------------------------------------------------------------------
+
+(def live-panel-trigger
+  "Events that should refresh a Human Help live panel.
+
+   Important: this trigger belongs on the stable SSE wrapper, not on the
+   replaceable inner fragment root. The inner root is replaced by fragment
+   responses and therefore must not own the long-lived SSE/fetch behavior."
+  "load, pageshow from:window, focus from:window, visibilitychange from:document, online from:window, htmx:sseOpen, sse:live-update")
+
+(defn fragment-dom-id
+  [fragment-name]
+  (case fragment-name
+    :request-toolbar views/request-toolbar-dom-id
+    :request-list views/request-list-dom-id
+    (throw
+     (ex-info "Unknown Human Help fragment DOM id."
+              {:fragment fragment-name}))))
+
+(defn fragment-label
+  [fragment-name]
+  (case fragment-name
+    :request-toolbar "humanhelp-request-toolbar-fragment"
+    :request-list "humanhelp-request-list-fragment"
+    (throw
+     (ex-info "Unknown Human Help fragment label."
+              {:fragment fragment-name}))))
+
+(defn live-panel
+  "Render a stable Human Help live panel.
+
+   The outer node owns:
+   - hx-ext=\"sse\"
+   - sse-connect
+   - hx-get
+   - hx-trigger
+
+   The inner node owns the fragment DOM id and is the replaceable target.
+
+   This avoids the broken shape where the initial empty placeholder owns
+   hx-get/hx-trigger, gets replaced by real fragment HTML, and loses the
+   trigger permanently."
+  [fragment-name view-state]
+  (let [{:keys [fragment-url stream-url]}
+        (app-live/fragment-options fragment-name view-state)
+
+        dom-id (fragment-dom-id fragment-name)]
+    [:div {:data-gesso-live-fragment (fragment-label fragment-name)
+           :hx-ext "sse"
+           :sse-connect stream-url
+           :hx-get fragment-url
+           :hx-trigger live-panel-trigger
+           :hx-target (str "#" dom-id)
+           :hx-swap "outerHTML"}
+     [:div {:id dom-id}]]))
+
+(defn page-panels
+  "Return the stable live panels needed for the Human Help page.
+
+   Do not delegate to app-live/page-panels here. Human Help needs the fetch
+   trigger to live on the stable wrapper while the rendered fragment replaces
+   only the inner DOM target."
+  [view-state]
+  {:request-toolbar-panel (live-panel :request-toolbar view-state)
+   :request-list-panel (live-panel :request-list view-state)})
+
+;; -----------------------------------------------------------------------------
 ;; Render helpers
 ;; -----------------------------------------------------------------------------
 
@@ -184,7 +257,7 @@
     (merge
      {:user user
       :view-state view-state}
-     (app-live/page-panels view-state))))
+     (page-panels view-state))))
 
 (defn fragment-render-options
   [ctx]
