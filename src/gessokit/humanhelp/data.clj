@@ -1,4 +1,4 @@
-(ns gessokit.humanhelp.store
+(ns gessokit.humanhelp.data
   "Atom-backed fake persistence for the Human Help analogue.
 
    This namespace owns mutable demo state and request lifecycle mutations.

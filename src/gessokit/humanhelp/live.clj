@@ -20,7 +20,7 @@
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.store :as store]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]))
 
 ;; -----------------------------------------------------------------------------
@@ -59,7 +59,7 @@
 
 (defn- normalized-render-view-state
   [ctx]
-  (store/normalize-view-state
+  (data/normalize-view-state
    (render-view-state ctx)))
 
 ;; -----------------------------------------------------------------------------
@@ -81,7 +81,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (store/toolbar-data view-state)
+     (data/toolbar-data view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))
@@ -90,7 +90,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (store/board-data view-state)
+     (data/board-data view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))

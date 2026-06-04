@@ -4,7 +4,7 @@
    This namespace intentionally stays thin. It wires together:
 
    - gessokit.humanhelp.model
-   - gessokit.humanhelp.store
+   - gessokit.humanhelp.data
    - gessokit.humanhelp.views
    - gessokit.humanhelp.live
    - gessokit.client-plumbing
@@ -19,7 +19,7 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as app-live]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.store :as store]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]
    [gessokit.middleware :as mid])
   (:import
@@ -192,7 +192,7 @@
    - :visible-revision
 
    :visible-revision controls the 'new data available, click refresh' behavior.
-   A nil visible revision is normalized to latest by store/live code for initial
+   A nil visible revision is normalized to latest by data/live code for initial
    page loads."
   [ctx]
   {:search (or (param ctx :q) "")
@@ -293,7 +293,7 @@
   (g/oob-outer-html
    views/board-state-form-id
    (views/search-control
-    {:view-state (store/normalize-view-state view-state)})))
+    {:view-state (data/normalize-view-state view-state)})))
 
 (defn with-board-state-oob
   [node view-state]
@@ -308,7 +308,7 @@
 (defn page-data
   [ctx]
   (let [user       (current-user ctx)
-        view-state (store/normalize-view-state
+        view-state (data/normalize-view-state
                     (request-view-state ctx))]
     (merge
      {:user user
@@ -444,7 +444,7 @@
          :errors errors}))
 
       (let [{:keys [request revision]}
-            (store/create-request!
+            (data/create-request!
              {:user user
               :input input})]
 
@@ -474,7 +474,7 @@
   [ctx]
   (let [view-state (assoc (request-view-state ctx)
                           :visible-revision
-                          (store/latest-revision))]
+                          (data/latest-revision))]
     (html
      (with-board-state-oob
        (views/refreshed-request-board-fragments
@@ -565,35 +565,35 @@
   (lifecycle-action!
    ctx
    :claim
-   store/claim-request!))
+   data/claim-request!))
 
 (defn unclaim-request!
   [ctx]
   (lifecycle-action!
    ctx
    :unclaim
-   store/unclaim-request!))
+   data/unclaim-request!))
 
 (defn take-over-request!
   [ctx]
   (lifecycle-action!
    ctx
    :take-over
-   store/take-over-request!))
+   data/take-over-request!))
 
 (defn mark-request-done!
   [ctx]
   (lifecycle-action!
    ctx
    :done
-   store/mark-request-done!))
+   data/mark-request-done!))
 
 (defn cancel-request!
   [ctx]
   (lifecycle-action!
    ctx
    :cancel
-   store/cancel-request!))
+   data/cancel-request!))
 
 ;; -----------------------------------------------------------------------------
 ;; Dev/demo reset
@@ -602,7 +602,7 @@
 (defn reset-demo!
   [ctx]
   (let [user       (current-user ctx)
-        result     (store/reset-demo-state!)
+        result     (data/reset-demo-state!)
         view-state (assoc (request-view-state ctx)
                           :visible-revision
                           (:revision result))]
