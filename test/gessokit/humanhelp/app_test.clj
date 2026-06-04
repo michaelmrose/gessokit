@@ -6,7 +6,7 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.store :as store]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]
    [gessokit.middleware :as mid]))
 
@@ -43,11 +43,11 @@
 
 (defn reset-store-fixture
   [f]
-  (store/reset-demo-state!)
+  (data/reset-demo-state!)
   (try
     (f)
     (finally
-      (store/reset-demo-state!))))
+      (data/reset-demo-state!))))
 
 (use-fixtures :each reset-store-fixture)
 
@@ -164,7 +164,7 @@
   []
   (first
    (filter #(= :open (:request/status %))
-           (store/all-requests))))
+           (data/all-requests))))
 
 (defn owner-ctx-for
   [request]
@@ -528,7 +528,7 @@
 (deftest create-request-success-test
   (let [notified (atom [])
         toasted (atom [])
-        before-revision (store/latest-revision)]
+        before-revision (data/latest-revision)]
     (with-redefs [hh-live/notify! (recording-notify notified)
                   hh-live/send-new-request-toast!
                   (fn [request & [opts]]
@@ -543,7 +543,7 @@
                                  "customer-name" "Avery"}))
             response (app/create-request! ctx)]
         (is (html-response? response))
-        (is (= (inc before-revision) (store/latest-revision)))
+        (is (= (inc before-revision) (data/latest-revision)))
         (is (= 1 (count @notified)))
         (is (= 1 (count @toasted)))
 
@@ -559,7 +559,7 @@
           (is (= ::live-system live-system))
           (is (= ctx ctx'))
           (is (= :request/created (:topic change)))
-          (is (= model/store-id (:store/id change))))
+          (is (= model/store-id (:data/id change))))
 
         (is (response-oob? response views/request-toolbar-dom-id))
         (is (response-oob? response views/request-list-dom-id))
@@ -571,7 +571,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest refresh-requests-test
-  (store/create-request!
+  (data/create-request!
    {:user {:user/id "creator"
            :user/email "creator@example.com"}
     :input {:title "New hidden request"
@@ -579,7 +579,7 @@
             :details nil
             :customer-name "Creator"}})
 
-  (let [latest (store/latest-revision)
+  (let [latest (data/latest-revision)
         response (app/refresh-requests!
                   (assoc base-ctx
                          :params {"q" "garden"
@@ -627,14 +627,14 @@
         notified (atom [])]
     (with-redefs [hh-live/notify! (recording-notify notified)]
       (let [ctx (ctx-with-request-id helper-ctx (:request/id open-request))
-            response (app/lifecycle-action! ctx :claim store/claim-request!)]
+            response (app/lifecycle-action! ctx :claim data/claim-request!)]
         (is (html-response? response))
         (is (= :claimed
                (:request/status
-                (store/request-by-id (:request/id open-request)))))
+                (data/request-by-id (:request/id open-request)))))
         (is (= "helper"
                (:request/claimed-by
-                (store/request-by-id (:request/id open-request)))))
+                (data/request-by-id (:request/id open-request)))))
         (is (= 1 (count @notified)))
 
         (let [[live-system ctx' change] (first @notified)]
@@ -654,12 +654,12 @@
       (let [response (app/lifecycle-action!
                       (ctx-with-request-id ctx (:request/id open-request))
                       :claim
-                      store/claim-request!)]
+                      data/claim-request!)]
         (is (html-response? response))
         (is (body-contains? response "Request not updated"))
         (is (empty? @notified))
         (is (= open-request
-               (store/request-by-id (:request/id open-request))))))))
+               (data/request-by-id (:request/id open-request))))))))
 
 (defn delegated-action
   [handler]
@@ -673,27 +673,27 @@
 (deftest lifecycle-specific-handlers-test
   (is (= {:ctx base-ctx
           :action :claim
-          :store-fn store/claim-request!}
+          :store-fn data/claim-request!}
          (delegated-action app/claim-request!)))
 
   (is (= {:ctx base-ctx
           :action :unclaim
-          :store-fn store/unclaim-request!}
+          :store-fn data/unclaim-request!}
          (delegated-action app/unclaim-request!)))
 
   (is (= {:ctx base-ctx
           :action :take-over
-          :store-fn store/take-over-request!}
+          :store-fn data/take-over-request!}
          (delegated-action app/take-over-request!)))
 
   (is (= {:ctx base-ctx
           :action :done
-          :store-fn store/mark-request-done!}
+          :store-fn data/mark-request-done!}
          (delegated-action app/mark-request-done!)))
 
   (is (= {:ctx base-ctx
           :action :cancel
-          :store-fn store/cancel-request!}
+          :store-fn data/cancel-request!}
          (delegated-action app/cancel-request!))))
 
 ;; -----------------------------------------------------------------------------
@@ -701,7 +701,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest reset-demo-test
-  (store/create-request!
+  (data/create-request!
    {:user {:user/id "creator"
            :user/email "creator@example.com"}
     :input {:title "Temporary request"
@@ -709,7 +709,7 @@
             :details nil
             :customer-name "Creator"}})
 
-  (is (> (store/latest-revision) 3))
+  (is (> (data/latest-revision) 3))
 
   (let [notified (atom [])
         reset-toasts (atom 0)]
@@ -720,7 +720,7 @@
                     {:sent 1})]
       (let [response (app/reset-demo! base-ctx)]
         (is (html-response? response))
-        (is (= 3 (store/latest-revision)))
+        (is (= 3 (data/latest-revision)))
         (is (= 1 (count @notified)))
         (is (= 1 @reset-toasts))
 

@@ -6,7 +6,7 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.store :as store]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]))
 
 ;; -----------------------------------------------------------------------------
@@ -31,11 +31,11 @@
 
 (defn reset-store-fixture
   [f]
-  (store/reset-demo-state!)
+  (data/reset-demo-state!)
   (try
     (f)
     (finally
-      (store/reset-demo-state!))))
+      (data/reset-demo-state!))))
 
 (use-fixtures :each reset-store-fixture)
 
@@ -165,20 +165,20 @@
   (testing "query merges toolbar data with ctx, store id, and render user"
     (let [render-options {:user user-owner
                           :view-state {:search ""
-                                       :visible-revision (store/latest-revision)}}
+                                       :visible-revision (data/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-toolbar-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
-      (is (= model/store-id (:store/id data)))
+      (is (= model/store-id (:data/id data)))
       (is (= user-owner (:user data)))
-      (is (= (store/latest-revision) (:latest-revision data)))
-      (is (= (store/open-request-count) (:open-count data)))
+      (is (= (data/latest-revision) (:latest-revision data)))
+      (is (= (data/open-request-count) (:open-count data)))
       (is (contains? data :pending-open-count))
       (is (contains? data :stale?))))
 
   (testing "query respects visible revision supplied in render options"
-    (let [visible-before (store/latest-revision)]
-      (store/create-request!
+    (let [visible-before (data/latest-revision)]
+      (data/create-request!
        {:user user-owner
         :input (valid-input {:title "New pending request"})})
       (let [render-options {:user user-owner
@@ -194,18 +194,18 @@
   (testing "query merges board data with ctx, store id, and render user"
     (let [render-options {:user user-owner
                           :view-state {:search ""
-                                       :visible-revision (store/latest-revision)}}
+                                       :visible-revision (data/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-list-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
-      (is (= model/store-id (:store/id data)))
+      (is (= model/store-id (:data/id data)))
       (is (= user-owner (:user data)))
-      (is (= (store/latest-revision) (:latest-revision data)))
+      (is (= (data/latest-revision) (:latest-revision data)))
       (is (vector? (:requests data)))
       (is (map? (:view-state data)))))
 
   (testing "query respects search"
-    (store/create-request!
+    (data/create-request!
      {:user user-owner
       :input (valid-input
               {:title "Need a purple snow shovel"
@@ -214,7 +214,7 @@
                :customer-name "Mina"})})
     (let [render-options {:user user-owner
                           :view-state {:search "purple mina seasonal"
-                                       :visible-revision (store/latest-revision)}}
+                                       :visible-revision (data/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
           data (hh-live/request-list-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
@@ -231,11 +231,11 @@
                 {:ctx ctx
                  :user user-owner
                  :view-state {:search ""
-                              :visible-revision (store/latest-revision)}
+                              :visible-revision (data/latest-revision)}
                  :open-count 2
                  :pending-open-count 0
                  :stale? false
-                 :latest-revision (store/latest-revision)})]
+                 :latest-revision (data/latest-revision)})]
       (is (= views/request-toolbar-dom-id (:id (attrs node))))
       (is (= "request-toolbar"
              (:data-humanhelp-fragment (attrs node))))
@@ -247,9 +247,9 @@
                 {:ctx ctx
                  :user user-owner
                  :view-state {:search ""
-                              :visible-revision (store/latest-revision)}
-                 :requests (store/all-requests)
-                 :latest-revision (store/latest-revision)})]
+                              :visible-revision (data/latest-revision)}
+                 :requests (data/all-requests)
+                 :latest-revision (data/latest-revision)})]
       (is (= views/request-list-dom-id (:id (attrs node))))
       (is (= "request-list"
              (:data-humanhelp-fragment (attrs node)))))))
@@ -447,7 +447,7 @@
                  :revision 4
                  :actor user-owner})]
     (is (= :request/created (:topic change)))
-    (is (= model/store-id (:store/id change)))
+    (is (= model/store-id (:data/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :open (:request/status change)))
@@ -486,7 +486,7 @@
                  :revision 5
                  :actor user-helper})]
     (is (= :request/claimed (:topic change)))
-    (is (= model/store-id (:store/id change)))
+    (is (= model/store-id (:data/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :claimed (:request/status change)))
@@ -501,7 +501,7 @@
         change (hh-live/minute-tick-change)
         after (System/currentTimeMillis)]
     (is (= :clock/minute (:topic change)))
-    (is (= model/store-id (:store/id change)))
+    (is (= model/store-id (:data/id change)))
     (is (integer? (:at-ms change)))
     (is (<= before (:at-ms change) after))))
 
@@ -510,7 +510,7 @@
                 {:revision 9
                  :actor user-owner})]
     (is (= :humanhelp-demo/reset (:topic change)))
-    (is (= model/store-id (:store/id change)))
+    (is (= model/store-id (:data/id change)))
     (is (= 9 (:revision change)))
     (is (= "user-owner" (:actor/id change)))
     (is (= "owner@example.com" (:actor/email change)))))
@@ -619,7 +619,7 @@
     (let [calls (atom [])
           live-system ::live-system
           change {:topic :request/created
-                  :store/id model/store-id}]
+                  :data/id model/store-id}]
       (with-redefs [live/submit-expanded!
                     (fn [& args]
                       (swap! calls conj args)
@@ -640,7 +640,7 @@
                 :request-toolbar
                 {:user user-owner
                  :view-state {:search ""
-                              :visible-revision (store/latest-revision)}})]
+                              :visible-revision (data/latest-revision)}})]
       (is (= views/request-toolbar-dom-id (:id (attrs node))))
       (is (contains-text? node "Requests"))))
 
@@ -650,7 +650,7 @@
                 :request-list
                 {:user user-owner
                  :view-state {:search ""
-                              :visible-revision (store/latest-revision)}})]
+                              :visible-revision (data/latest-revision)}})]
       (is (= views/request-list-dom-id (:id (attrs node))))
       (is (or (contains-text? node "Need help")
               (contains-text? node "No requests"))))))
@@ -662,7 +662,7 @@
                     :request-toolbar
                     {:user user-owner
                      :view-state {:search ""
-                                  :visible-revision (store/latest-revision)}})]
+                                  :visible-revision (data/latest-revision)}})]
       (is (= 200 (:status response)))
       (is (= "text/html; charset=utf-8"
              (get-in response [:headers "content-type"])))
@@ -676,7 +676,7 @@
                     :request-list
                     {:user user-owner
                      :view-state {:search ""
-                                  :visible-revision (store/latest-revision)}})]
+                                  :visible-revision (data/latest-revision)}})]
       (is (= 200 (:status response)))
       (is (= "text/html; charset=utf-8"
              (get-in response [:headers "content-type"])))

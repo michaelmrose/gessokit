@@ -6,7 +6,7 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.store :as store]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]))
 
 ;; -----------------------------------------------------------------------------
@@ -37,11 +37,11 @@
 
 (defn reset-store-fixture
   [f]
-  (store/reset-demo-state!)
+  (data/reset-demo-state!)
   (try
     (f)
     (finally
-      (store/reset-demo-state!))))
+      (data/reset-demo-state!))))
 
 (use-fixtures :each reset-store-fixture)
 
@@ -90,15 +90,15 @@
   [title]
   (first
    (filter #(= title (:request/title %))
-           (store/all-requests))))
+           (data/all-requests))))
 
 (defn request-status
   [request-id]
-  (:request/status (store/request-by-id request-id)))
+  (:request/status (data/request-by-id request-id)))
 
 (defn request-claimer
   [request-id]
-  (:request/claimed-by (store/request-by-id request-id)))
+  (:request/claimed-by (data/request-by-id request-id)))
 
 (defn request-titles
   [requests]
@@ -107,7 +107,7 @@
 (defn board-titles
   [view-state]
   (request-titles
-   (:requests (store/board-data view-state))))
+   (:requests (data/board-data view-state))))
 
 (defn notify-recorder
   [calls]
@@ -176,17 +176,17 @@
 
 (deftest initial-state-flow-test
   (testing "reset seed state is usable for the demo board"
-    (let [latest (store/latest-revision)
-          toolbar (store/toolbar-data {:search ""
+    (let [latest (data/latest-revision)
+          toolbar (data/toolbar-data {:search ""
                                        :visible-revision latest})
-          board (store/board-data {:search ""
+          board (data/board-data {:search ""
                                    :visible-revision latest})]
       (is (= 3 latest))
       (is (= latest (:latest-revision toolbar)))
       (is (= latest (:latest-revision board)))
       (is (seq (:requests board)))
-      (is (= (store/open-request-count) (:open-count toolbar)))
-      (is (= (store/open-request-count) (:open-count board)))
+      (is (= (data/open-request-count) (:open-count toolbar)))
+      (is (= (data/open-request-count) (:open-count board)))
       (is (false? (:stale? toolbar)))
       (is (false? (:stale? board))))))
 
@@ -206,7 +206,7 @@
 
 (deftest create-request-valid-flow-test
   (testing "valid app create mutates store, emits live change, sends toast, returns OOB"
-    (let [before-revision (store/latest-revision)
+    (let [before-revision (data/latest-revision)
           title "Need help finding purple gloves"
           result (create-request-through-app!
                   base-ctx
@@ -219,7 +219,7 @@
           created (request-by-title title)]
       (is (html-response? response))
       (is created)
-      (is (= (inc before-revision) (store/latest-revision)))
+      (is (= (inc before-revision) (data/latest-revision)))
       (is (= :open (:request/status created)))
       (is (= "owner" (:request/customer-user-id created)))
       (is (= "Avery" (:request/customer-name created)))
@@ -229,7 +229,7 @@
         (is (= ::live-system live-system))
         (is (= :request/created (:topic change)))
         (is (= (:request/id created) (:request/id change)))
-        (is (= model/store-id (:store/id change)))
+        (is (= model/store-id (:data/id change)))
         (is (= "owner" (:actor/id change)))
         (is (= "owner@example.com" (:actor/email change)))
         (is (= ctx (ctx-with-params
@@ -247,16 +247,16 @@
 
 (deftest create-request-invalid-flow-test
   (testing "invalid app create does not mutate, notify, or toast"
-    (let [before-revision (store/latest-revision)
-          before-requests (store/all-requests)
+    (let [before-revision (data/latest-revision)
+          before-requests (data/all-requests)
           result (create-request-through-app!
                   base-ctx
                   {"title" ""
                    "area" ""})
           response (:response result)]
       (is (html-response? response))
-      (is (= before-revision (store/latest-revision)))
-      (is (= before-requests (store/all-requests)))
+      (is (= before-revision (data/latest-revision)))
+      (is (= before-requests (data/all-requests)))
       (is (empty? (:notify-calls result)))
       (is (empty? (:request-toasts result)))
       (is (oob-response-for? response views/create-request-dialog-id))
@@ -268,7 +268,7 @@
 
 (deftest two-viewer-create-refresh-flow-test
   (testing "other viewer gets stale board semantics until refresh"
-    (let [viewer-b-visible-revision (store/latest-revision)
+    (let [viewer-b-visible-revision (data/latest-revision)
           title "Need help loading cedar mulch"
           create-result (create-request-through-app!
                          base-ctx
@@ -277,14 +277,14 @@
                            "area" "Garden"
                            "details" "Five bags near entrance"
                            "customer-name" "Mina"}))
-          latest (store/latest-revision)
-          stale-toolbar (store/toolbar-data
+          latest (data/latest-revision)
+          stale-toolbar (data/toolbar-data
                          {:search ""
                           :visible-revision viewer-b-visible-revision})
-          stale-board (store/board-data
+          stale-board (data/board-data
                        {:search ""
                         :visible-revision viewer-b-visible-revision})
-          fresh-board (store/board-data
+          fresh-board (data/board-data
                        {:search ""
                         :visible-revision latest})]
       (is (html-response? (:response create-result)))
@@ -306,7 +306,7 @@
 
 (deftest create-refresh-with-search-flow-test
   (testing "refresh preserves search while advancing visible revision"
-    (let [old-revision (store/latest-revision)
+    (let [old-revision (data/latest-revision)
           title "Need help finding a blue snow shovel"]
       (create-request-through-app!
        base-ctx
@@ -316,12 +316,12 @@
          "details" "Blue shovel near front"
          "customer-name" "Nora"}))
 
-      (let [stale-matching (store/board-data
+      (let [stale-matching (data/board-data
                             {:search "blue shovel nora"
                              :visible-revision old-revision})
-            fresh-matching (store/board-data
+            fresh-matching (data/board-data
                             {:search "blue shovel nora"
-                             :visible-revision (store/latest-revision)})]
+                             :visible-revision (data/latest-revision)})]
         (is (not (contains? (request-titles (:requests stale-matching))
                             title)))
         (is (contains? (request-titles (:requests fresh-matching))
@@ -342,7 +342,7 @@
          "details" "Customer is comparing bark tools"
          "customer-name" "Jon"}))
 
-      (let [latest (store/latest-revision)]
+      (let [latest (data/latest-revision)]
         (is (contains? (board-titles {:search "jon rake garden"
                                       :visible-revision latest})
                        title))
@@ -359,7 +359,7 @@
                     (ctx-with-params
                      base-ctx
                      {"q" "garden"
-                      "visible-revision" (str (store/latest-revision))}))]
+                      "visible-revision" (str (data/latest-revision))}))]
       (is (html-response? response))
       (is (body-contains? response views/request-list-dom-id))
       (is (not (body-contains? response views/request-toolbar-dom-id))))))
@@ -370,11 +370,11 @@
 
 (deftest select-request-flow-test
   (testing "select handler expands a visible card by setting selected request id"
-    (let [request (first (store/all-requests))
+    (let [request (first (data/all-requests))
           ctx (ctx-with-request-id base-ctx (:request/id request))
           ctx (assoc ctx
                      :params {"selected" (:request/id request)
-                              "visible-revision" (str (store/latest-revision))})
+                              "visible-revision" (str (data/latest-revision))})
           response (app/select-request ctx)]
       (is (html-response? response))
       (is (body-contains? response views/request-list-dom-id))
@@ -536,7 +536,7 @@
          "customer-name" "Temp"}))
 
       (is (request-by-title created-title))
-      (is (> (store/latest-revision) 3))
+      (is (> (data/latest-revision) 3))
 
       (let [notify-calls (atom [])
             reset-toasts (atom 0)]
@@ -545,7 +545,7 @@
                         hh-live/send-reset-toast! (reset-toast-recorder reset-toasts)]
             (let [response (app/reset-demo! base-ctx)]
               (is (html-response? response))
-              (is (= 3 (store/latest-revision)))
+              (is (= 3 (data/latest-revision)))
               (is (nil? (request-by-title created-title)))
               (is (= 1 @reset-toasts))
               (is (= 1 (count @notify-calls)))
@@ -576,7 +576,7 @@
 
 (deftest rendered-fragment-flow-test
   (testing "toolbar/list render through live layer using current store data"
-    (let [latest (store/latest-revision)
+    (let [latest (data/latest-revision)
           toolbar-response (hh-live/render-fragment-response
                             base-ctx
                             :request-toolbar
