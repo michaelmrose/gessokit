@@ -456,7 +456,8 @@
            :revision revision
            :actor user}))
 
-        (app-live/send-new-request-toast! request)
+        #_(app-live/send-new-request-toast! request)
+        (app-live/send-new-request-toast! request {:actor user})
 
         (create-request-success-response
          ctx

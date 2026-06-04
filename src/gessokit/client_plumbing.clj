@@ -14,7 +14,6 @@
    Feature-specific notification wording belongs in feature namespaces, e.g.
    gessokit.humanhelp.live."
   (:require
-   [clojure.string :as str]
    [gesso.core :as g]
    [gesso.live.client :as live-client]
    [gessokit.middleware :as mid]))
@@ -49,23 +48,11 @@
 ;; App identity
 ;; -----------------------------------------------------------------------------
 
-(defn emailish?
-  "True when x looks like an email address.
-
-   This is intentionally lightweight. It is not a validator; it only keeps
-   display-email helpers from preferring UUID/session ids over actual emails."
-  [x]
-  (and (string? x)
-       (str/includes? x "@")))
-
 (defn current-user-id
   "Return the app user id used for connected-client targeting.
 
    Biff auth usually gives us a session uid. We intentionally return a string
-   because client targeting keys should be stable and easy to serialize/log.
-
-   In very lightweight test/dev contexts, a session email may be the only
-   identity present, so it is accepted as a fallback before demo-user."
+   because client targeting keys should be stable and easy to serialize/log."
   [ctx]
   (str
    (or (:user/id ctx)
@@ -73,7 +60,6 @@
        (get-in ctx [:user :xt/id])
        (get-in ctx [:user :email])
        (get-in ctx [:session :uid])
-       (get-in ctx [:session :email])
        (get-in ctx [:session :user])
        "demo-user")))
 
@@ -81,21 +67,15 @@
   "Best-effort display email for app UI.
 
    This namespace does not query XTDB. If the surrounding app wants an exact
-   email address, it can attach it to ctx before rendering.
-
-   Prefer email-looking values. Fall back to current-user-id only as a final
-   generic display value."
+   email address, it can attach it to ctx before rendering."
   [ctx]
-  (or (some
-       (fn [x]
-         (when (emailish? x)
-           x))
-       [(:user/email ctx)
-        (get-in ctx [:user :email])
-        (get-in ctx [:session :email])
-        (get-in ctx [:params :email])
-        (get-in ctx [:params "email"])])
-      (current-user-id ctx)))
+  (str
+   (or (:user/email ctx)
+       (get-in ctx [:user :email])
+       (get-in ctx [:session :email])
+       (get-in ctx [:params :email])
+       (get-in ctx [:params "email"])
+       (current-user-id ctx))))
 
 (defn current-client
   "Return the app-defined client descriptor for this connected browser.
@@ -215,13 +195,96 @@
   (apply live-client/broadcast! channel fragments))
 
 ;; -----------------------------------------------------------------------------
+;; Scope/user exclusion helpers
+;; -----------------------------------------------------------------------------
+
+(defn client-user-id
+  "Return the normalized user id from a connected-client descriptor.
+
+   The primary shape is the descriptor returned by current-client:
+     {:client/user-id ...
+      :client/scopes ...}
+
+   Extra fallbacks make this helper tolerant of small live-client storage-shape
+   changes."
+  [client]
+  (some-> (or (:client/user-id client)
+              (:user-id client)
+              (get-in client [:client :user-id]))
+          str))
+
+(defn client-scopes
+  "Return the scope set from a connected-client descriptor."
+  [client]
+  (set
+   (or (:client/scopes client)
+       (:scopes client)
+       (get-in client [:client :scopes])
+       #{})))
+
+(defn client-in-scope?
+  [scope client]
+  (contains? (client-scopes client) scope))
+
+(defn target-client-ids-for-scope-except-user
+  "Return connected client ids in scope, excluding all clients owned by user-id."
+  [scope user-id]
+  (let [excluded-user-id (some-> user-id str)]
+    (->> (connected-clients)
+         (keep
+          (fn [[client-id client]]
+            (when (and (client-in-scope? scope client)
+                       (not= excluded-user-id
+                             (client-user-id client)))
+              client-id)))
+         vec)))
+
+(defn summarize-send-results
+  [{:keys [target scope excluded-user-id client-ids fragment-count results]}]
+  (let [sent (reduce + (map #(or (:sent %) 0) results))
+        woke (reduce + (map #(or (:woke %) 0) results))]
+    {:sent sent
+     :woke woke
+     :woke? (pos? woke)
+     :target target
+     :scope scope
+     :excluded-user-id excluded-user-id
+     :client-ids client-ids
+     :fragment-count fragment-count
+     :results results}))
+
+(defn send-to-scope-except-user!
+  "Send arbitrary OOB fragments to every connected browser client in scope
+   except clients owned by excluded-user-id.
+
+   This is app-policy fanout. Gesso scopes remain simple and generic; this
+   adapter decides how to combine scope membership with current app identity."
+  [scope excluded-user-id & fragments]
+  (let [excluded-user-id (some-> excluded-user-id str)
+        client-ids       (target-client-ids-for-scope-except-user
+                          scope
+                          excluded-user-id)
+        results          (mapv
+                          (fn [client-id]
+                            (apply send-to-client! client-id fragments))
+                          client-ids)]
+    (summarize-send-results
+     {:target [:scope-except-user scope excluded-user-id]
+      :scope scope
+      :excluded-user-id excluded-user-id
+      :client-ids client-ids
+      :fragment-count (count fragments)
+      :results results})))
+
+;; -----------------------------------------------------------------------------
 ;; Generic toast helpers
 ;; -----------------------------------------------------------------------------
 
 (def default-toast
   {:variant :info
    :title "Live event"
-   :description "The page received a live update."})
+   :description "The page received a live update."
+   :duration 1000})
 
 (defn normalize-toast
   [toast]
@@ -266,6 +329,18 @@
   (let [toast' (normalize-toast toast)]
     (merge
      (send-to-scope! scope (toast-oob toast'))
+     {:toast toast'})))
+
+(defn send-toast-to-scope-except-user!
+  "Send one normalized toast to every connected browser client in scope except
+   clients owned by excluded-user-id."
+  [scope excluded-user-id toast]
+  (let [toast' (normalize-toast toast)]
+    (merge
+     (send-to-scope-except-user!
+      scope
+      excluded-user-id
+      (toast-oob toast'))
      {:toast toast'})))
 
 (defn broadcast-toast!

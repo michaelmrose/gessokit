@@ -382,15 +382,29 @@
      (str ": " (:request/title request)))))
 
 (defn send-new-request-toast!
-  "Send the Human Help new-request toast to connected app browsers.
+  "Send a Human Help new-request toast.
 
-   This is feature-specific wording layered over generic client plumbing."
-  [request]
-  (client-plumbing/send-toast-to-scope!
-   notification-scope
-   {:variant :info
-    :title "New request received"
-    :description (request-toast-description request)}))
+   By default this targets the Human Help notification scope. When actor or
+   exclude-user-id is supplied, clients owned by that user are excluded. This
+   avoids showing the creator both:
+   - the local create-success toast
+   - the broadcast \"New request received\" toast"
+  ([request]
+   (send-new-request-toast! request {}))
+  ([request {:keys [actor exclude-user-id]}]
+   (let [excluded-user-id (or exclude-user-id
+                              (:user/id actor))
+         toast {:variant :info
+                :title "New request received"
+                :description (request-toast-description request)}]
+     (if excluded-user-id
+       (client-plumbing/send-toast-to-scope-except-user!
+        notification-scope
+        excluded-user-id
+        toast)
+       (client-plumbing/send-toast-to-scope!
+        notification-scope
+        toast)))))
 
 (defn send-reset-toast!
   "Send a Human Help demo reset toast."
