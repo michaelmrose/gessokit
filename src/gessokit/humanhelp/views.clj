@@ -167,7 +167,14 @@
        :class "cluster-theme items-center"
        :style {:color "var(--foreground)"
                :text-decoration "none"}}
-   (g/icon "hand-heart" {:size :sm})
+   ;; (g/icon "hh" {:size :sm})
+   [:img {:src "/img/hh.png"
+          :alt ""
+          :aria-hidden "true"
+          :style {:width "1.5rem"
+                  :height "1.5rem"
+                  :object-fit "contain"
+                  :display "block"}}]
    [:span {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme"}
     "Human Help"]])
 
@@ -184,6 +191,38 @@
     "Log out"]])
 
 (defn user-menu
+  [user]
+  (let [email (user-email user)]
+    [:details {:class "relative"}
+     [:summary {:class "inline-flex items-center justify-center control-theme border-theme radius-md cursor-pointer"
+                :aria-label "Account"
+                :title email
+                :style {:width "3rem"
+                        :height "3rem"
+                        :list-style "none"}}
+      (g/icon "circle-user-round" {:size :2xl
+                                   :title "Account"
+                                   :attrs {:stroke-width 1.5}
+                                   })]
+
+     [:div {:class "absolute right-0 mt-2 min-w-56 radius-lg border-theme shadow-lg"
+            :style {:background "var(--popover)"
+                    :color "var(--popover-foreground)"
+                    :z-index 50
+                    :overflow "hidden"}}
+      [:div {:class "stack-sm-theme p-3"}
+       [:p {:class "text-xs-theme"
+            :style {:color "var(--muted-foreground)"}}
+        "Signed in as"]
+       [:p {:class "text-sm-theme weight-medium-theme"
+            :style {:max-width "16rem"
+                    :overflow "hidden"
+                    :text-overflow "ellipsis"
+                    :white-space "nowrap"}}
+        email]]
+      (logout-form)]]))
+
+#_(defn user-menu
   [user]
   [:details {:class "relative"}
    [:summary {:class "inline-flex cursor-pointer list-none items-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"

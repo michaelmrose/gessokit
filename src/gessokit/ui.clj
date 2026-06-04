@@ -319,6 +319,10 @@
                      (when (io/resource "public/gesso/app-themes.css")
                        [:link {:rel "stylesheet"
                                :href (static-path "/gesso/app-themes.css")}])
+                     [:link {:rel "icon"
+                             :href "/favicon.ico"
+                             :sizes "any"}]
+
                      [:script {:src "https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/js/all.min.js"
                                :defer true}]
                      [:script {:src (static-path "/js/main.js")

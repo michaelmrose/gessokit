@@ -1,8 +1,44 @@
 (ns gessokit.humanhelp.data-test
   (:require
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.model :as model]
-   [gessokit.humanhelp.data :as data]))
+   [xtdb.node :as xtn]))
+
+;; -----------------------------------------------------------------------------
+;; XTDB fixture
+;; -----------------------------------------------------------------------------
+
+(defonce !ctx
+  (atom nil))
+
+(defn ctx
+  []
+  (or @!ctx
+      (throw
+       (ex-info "data-test ctx has not been initialized."
+                {}))))
+
+(defn xtdb-fixture
+  [f]
+  (with-open [node (xtn/start-node)]
+    (reset! !ctx {:biff/node node
+                  :biff/conn node})
+    (try
+      (f)
+      (finally
+        (reset! !ctx nil)))))
+
+(defn reset-data-fixture
+  [f]
+  (data/reset-demo-state! (ctx))
+  (try
+    (f)
+    (finally
+      (data/reset-demo-state! (ctx)))))
+
+(use-fixtures :once xtdb-fixture)
+(use-fixtures :each reset-data-fixture)
 
 ;; -----------------------------------------------------------------------------
 ;; Fixtures
@@ -28,16 +64,6 @@
     :details "Looking for a sturdy rake for leaves."
     :customer-name "Jon"}
    overrides))
-
-(defn reset-store-fixture
-  [f]
-  (data/reset-demo-state!)
-  (try
-    (f)
-    (finally
-      (data/reset-demo-state!))))
-
-(use-fixtures :each reset-store-fixture)
 
 ;; -----------------------------------------------------------------------------
 ;; Generic assertions
@@ -95,26 +121,26 @@
   [title]
   (first
    (filter #(= title (:request/title %))
-           (data/all-requests))))
+           (data/all-requests (ctx)))))
 
 (defn seeded-open-request
   []
   (first
    (filter #(= :open (:request/status %))
-           (data/all-requests))))
+           (data/all-requests (ctx)))))
 
 (defn seeded-claimed-request
   []
   (first
    (filter #(= :claimed (:request/status %))
-           (data/all-requests))))
+           (data/all-requests (ctx)))))
 
 (defn seeded-terminal-request
   []
   (first
    (filter #(contains? #{:done :cancelled}
                        (:request/status %))
-           (data/all-requests))))
+           (data/all-requests (ctx)))))
 
 (defn create-open-request!
   "Create a fresh open request for tests that need independent lifecycle setup
@@ -122,6 +148,7 @@
   [overrides]
   (:request
    (data/create-request!
+    (ctx)
     {:user user-owner
      :input (valid-input overrides)})))
 
@@ -143,40 +170,41 @@
 
 (deftest reset-demo-state-test
   (testing "reset returns a result map with status and revision"
-    (let [result (data/reset-demo-state!)]
+    (let [result (data/reset-demo-state! (ctx))]
       (is (= :ok (:status result)))
       (is (integer? (:revision result)))
-      (is (= (:revision result) (data/latest-revision)))))
+      (is (= (:revision result) (data/latest-revision (ctx))))))
 
   (testing "reset restores deterministic seeded request collection"
     (let [first-reset (do
-                        (data/reset-demo-state!)
-                        {:revision (data/latest-revision)
-                         :requests (data/all-requests)})
+                        (data/reset-demo-state! (ctx))
+                        {:revision (data/latest-revision (ctx))
+                         :requests (data/all-requests (ctx))})
           _ (data/create-request!
+             (ctx)
              {:user user-owner
               :input (valid-input {:title "Temporary request"})})
           second-reset (do
-                         (data/reset-demo-state!)
-                         {:revision (data/latest-revision)
-                          :requests (data/all-requests)})]
+                         (data/reset-demo-state! (ctx))
+                         {:revision (data/latest-revision (ctx))
+                          :requests (data/all-requests (ctx))})]
       (is (= first-reset second-reset))))
 
   (testing "seeded requests have complete request shape"
-    (let [requests (data/all-requests)]
+    (let [requests (data/all-requests (ctx))]
       (is (seq requests))
       (is (every? request-shape-valid? requests))))
 
   (testing "seeded request ids are unique"
-    (let [ids (request-ids (data/all-requests))]
+    (let [ids (request-ids (data/all-requests (ctx)))]
       (is (= (count ids) (count (set ids))))))
 
   (testing "seeded request numbers are unique"
-    (let [numbers (mapv :request/number (data/all-requests))]
+    (let [numbers (mapv :request/number (data/all-requests (ctx)))]
       (is (= (count numbers) (count (set numbers))))))
 
   (testing "seeded state includes active request examples"
-    (let [statuses (set (map :request/status (data/all-requests)))]
+    (let [statuses (set (map :request/status (data/all-requests (ctx))))]
       (is (contains? statuses :open))
       (is (or (contains? statuses :claimed)
               (contains? statuses :done)
@@ -184,18 +212,20 @@
 
 (deftest latest-revision-test
   (testing "latest revision is integer and non-negative"
-    (is (integer? (data/latest-revision)))
-    (is (not (neg? (data/latest-revision)))))
+    (is (integer? (data/latest-revision (ctx))))
+    (is (not (neg? (data/latest-revision (ctx))))))
 
   (testing "latest revision is stable across pure reads"
-    (let [before (data/latest-revision)]
-      (data/all-requests)
-      (data/open-request-count)
-      (data/board-data {:search ""
-                         :visible-revision before})
-      (data/toolbar-data {:search ""
-                           :visible-revision before})
-      (is (= before (data/latest-revision))))))
+    (let [before (data/latest-revision (ctx))]
+      (data/all-requests (ctx))
+      (data/open-request-count (ctx))
+      (data/board-data (ctx)
+                       {:search ""
+                        :visible-revision before})
+      (data/toolbar-data (ctx)
+                         {:search ""
+                          :visible-revision before})
+      (is (= before (data/latest-revision (ctx)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; all-requests / request-by-id
@@ -203,24 +233,25 @@
 
 (deftest all-requests-test
   (testing "all-requests returns a sequential collection"
-    (is (sequential? (data/all-requests))))
+    (is (sequential? (data/all-requests (ctx)))))
 
   (testing "all-requests returns request maps"
-    (is (every? map? (data/all-requests))))
+    (is (every? map? (data/all-requests (ctx)))))
 
   (testing "all-requests does not expose duplicate ids"
-    (let [ids (request-ids (data/all-requests))]
+    (let [ids (request-ids (data/all-requests (ctx)))]
       (is (= (count ids) (count (set ids)))))))
 
 (deftest request-by-id-test
   (testing "existing ids return exact stored requests"
-    (doseq [request (data/all-requests)]
-      (is (= request (data/request-by-id (:request/id request))))))
+    (doseq [request (data/all-requests (ctx))]
+      (is (= request
+             (data/request-by-id (ctx) (:request/id request))))))
 
   (testing "missing ids return nil"
-    (is (nil? (data/request-by-id "missing-request-id")))
-    (is (nil? (data/request-by-id nil)))
-    (is (nil? (data/request-by-id "")))))
+    (is (nil? (data/request-by-id (ctx) "missing-request-id")))
+    (is (nil? (data/request-by-id (ctx) nil)))
+    (is (nil? (data/request-by-id (ctx) "")))))
 
 ;; -----------------------------------------------------------------------------
 ;; normalize-view-state
@@ -228,40 +259,45 @@
 
 (deftest normalize-view-state-test
   (testing "nil view-state normalizes to a usable map"
-    (let [view-state (data/normalize-view-state nil)]
+    (let [view-state (data/normalize-view-state (ctx) nil)]
       (is (map? view-state))
       (is (contains? view-state :search))
       (is (contains? view-state :selected-request-id))
       (is (contains? view-state :visible-revision))))
 
   (testing "blank search normalizes to an empty string"
-    (is (= "" (:search (data/normalize-view-state {:search nil}))))
-    (is (= "" (:search (data/normalize-view-state {:search ""}))))
-    (is (= "" (:search (data/normalize-view-state {:search "   "}))))))
+    (is (= "" (:search (data/normalize-view-state (ctx) {:search nil}))))
+    (is (= "" (:search (data/normalize-view-state (ctx) {:search ""}))))
+    (is (= "" (:search (data/normalize-view-state (ctx) {:search "   "})))))
 
   (testing "search is trimmed"
     (is (= "garden"
            (:search
-            (data/normalize-view-state {:search "  garden  "})))))
+            (data/normalize-view-state
+             (ctx)
+             {:search "  garden  "})))))
 
   (testing "selected request id is preserved when present"
     (is (= "hh-req-1"
            (:selected-request-id
             (data/normalize-view-state
+             (ctx)
              {:selected-request-id "hh-req-1"})))))
 
   (testing "visible revision defaults to latest when missing"
-    (is (= (data/latest-revision)
+    (is (= (data/latest-revision (ctx))
            (:visible-revision
-            (data/normalize-view-state nil))))
-    (is (= (data/latest-revision)
+            (data/normalize-view-state (ctx) nil))))
+    (is (= (data/latest-revision (ctx))
            (:visible-revision
-            (data/normalize-view-state {})))))
+            (data/normalize-view-state (ctx) {})))))
 
   (testing "visible revision is preserved when supplied"
     (is (= 1
            (:visible-revision
-            (data/normalize-view-state {:visible-revision 1})))))
+            (data/normalize-view-state
+             (ctx)
+             {:visible-revision 1}))))))
 
 ;; -----------------------------------------------------------------------------
 ;; create-request!
@@ -269,9 +305,10 @@
 
 (deftest create-request-success-test
   (testing "create-request! appends a new open request"
-    (let [before-revision (data/latest-revision)
-          before-count (count (data/all-requests))
+    (let [before-revision (data/latest-revision (ctx))
+          before-count (count (data/all-requests (ctx)))
           result (data/create-request!
+                  (ctx)
                   {:user user-owner
                    :input (valid-input
                            {:title "Need help finding gloves"
@@ -281,8 +318,8 @@
           request (:request result)]
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
-      (is (= (:revision result) (data/latest-revision)))
-      (is (= (inc before-count) (count (data/all-requests))))
+      (is (= (:revision result) (data/latest-revision (ctx))))
+      (is (= (inc before-count) (count (data/all-requests (ctx)))))
 
       (is (request-shape-valid? request))
       (is (= :open (:request/status request)))
@@ -296,16 +333,19 @@
       (is (nil? (:request/claimed-by-email request)))
       (is (= (:revision result) (:request/created-revision request)))
       (is (= (:revision result) (:request/updated-revision request)))
-      (is (= request (data/request-by-id (:request/id request)))))))
+      (is (= request
+             (data/request-by-id (ctx) (:request/id request)))))))
 
 (deftest create-request-numbering-test
   (testing "created request numbers and ids are unique and monotonic"
     (let [r1 (:request
               (data/create-request!
+               (ctx)
                {:user user-owner
                 :input (valid-input {:title "First new request"})}))
           r2 (:request
               (data/create-request!
+               (ctx)
                {:user user-owner
                 :input (valid-input {:title "Second new request"})}))]
       (is (not= (:request/id r1) (:request/id r2)))
@@ -317,6 +357,7 @@
 (deftest create-request-minimal-input-test
   (testing "details and customer-name may be nil"
     (let [result (data/create-request!
+                  (ctx)
                   {:user user-owner
                    :input (valid-input
                            {:title "Need help"
@@ -332,15 +373,16 @@
               (string? (:request/customer-name request)))))))
 
 (deftest create-request-does-not-validate-test
-  (testing "store layer assumes domain/app validation happened before create"
+  (testing "data layer assumes model/app validation happened before create"
     (let [result (data/create-request!
+                  (ctx)
                   {:user user-owner
                    :input {:title ""
                            :area ""
                            :details nil
                            :customer-name nil}})]
       ;; This documents the current layering expectation. If we later decide
-      ;; store should validate defensively, this test should change.
+      ;; data should validate defensively, this test should change.
       (is (= :ok (:status result)))
       (is (= "" (get-in result [:request :request/title])))
       (is (= "" (get-in result [:request :request/area]))))))
@@ -351,49 +393,60 @@
 
 (deftest open-request-count-test
   (testing "open-request-count matches active statuses in all requests"
-    (let [expected (count (filter active-status? (data/all-requests)))]
-      (is (= expected (data/open-request-count)))))
+    (let [expected (count (filter active-status?
+                                  (data/all-requests (ctx))))]
+      (is (= expected (data/open-request-count (ctx))))))
 
   (testing "creating an open request increments open-request-count"
-    (let [before (data/open-request-count)]
+    (let [before (data/open-request-count (ctx))]
       (data/create-request!
+       (ctx)
        {:user user-owner
         :input (valid-input {:title "New active request"})})
-      (is (= (inc before) (data/open-request-count))))))
+      (is (= (inc before) (data/open-request-count (ctx)))))))
 
 (deftest toolbar-data-test
   (testing "toolbar-data exposes the values needed by the toolbar fragment"
-    (let [data (data/toolbar-data {:search ""
-                                    :visible-revision (data/latest-revision)})]
-      (is (= (data/latest-revision) (:latest-revision data)))
-      (is (= (data/open-request-count) (:open-count data)))
-      (is (= 0 (:pending-open-count data)))
-      (is (false? (:stale? data)))))
+    (let [toolbar (data/toolbar-data
+                   (ctx)
+                   {:search ""
+                    :visible-revision (data/latest-revision (ctx))})]
+      (is (= (data/latest-revision (ctx)) (:latest-revision toolbar)))
+      (is (= (data/open-request-count (ctx)) (:open-count toolbar)))
+      (is (= 0 (:pending-open-count toolbar)))
+      (is (false? (:stale? toolbar)))))
 
   (testing "toolbar-data reports stale board and pending open requests"
-    (let [visible-before (data/latest-revision)]
+    (let [visible-before (data/latest-revision (ctx))]
       (data/create-request!
+       (ctx)
        {:user user-owner
         :input (valid-input {:title "Pending new request"})})
-      (let [data (data/toolbar-data {:search ""
-                                      :visible-revision visible-before})]
-        (is (= (data/latest-revision) (:latest-revision data)))
-        (is (true? (:stale? data)))
-        (is (= 1 (:pending-open-count data)))
-        (is (= (data/open-request-count) (:open-count data))))))
+      (let [toolbar (data/toolbar-data
+                     (ctx)
+                     {:search ""
+                      :visible-revision visible-before})]
+        (is (= (data/latest-revision (ctx)) (:latest-revision toolbar)))
+        (is (true? (:stale? toolbar)))
+        (is (= 1 (:pending-open-count toolbar)))
+        (is (= (data/open-request-count (ctx)) (:open-count toolbar))))))
 
   (testing "terminal newly-created requests do not count as pending open"
-    (let [visible-before (data/latest-revision)
+    (let [visible-before (data/latest-revision (ctx))
           {:keys [request]} (data/create-request!
+                             (ctx)
                              {:user user-owner
                               :input (valid-input {:title "Soon terminal"})})]
       (data/cancel-request!
+       (ctx)
        {:request-id (:request/id request)
         :user user-owner})
-      (let [data (data/toolbar-data {:search ""
-                                      :visible-revision visible-before})]
-        (is (true? (:stale? data)))
-        (is (= 0 (:pending-open-count data)))))))
+      (let [toolbar (data/toolbar-data
+                     (ctx)
+                     {:search ""
+                      :visible-revision visible-before})]
+        (is (true? (:stale? toolbar)))
+        (is (= 0 (:pending-open-count toolbar)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Board data / visibility
@@ -402,29 +455,34 @@
 (deftest board-data-shape-test
   (testing "board-data exposes stable fields"
     (let [view-state {:search ""
-                      :visible-revision (data/latest-revision)}
-          data (data/board-data view-state)]
-      (is (map? data))
-      (is (= (data/latest-revision) (:latest-revision data)))
-      (is (= (data/open-request-count) (:open-count data)))
-      (is (= 0 (:pending-open-count data)))
-      (is (false? (:stale? data)))
-      (is (vector? (:requests data)))
-      (is (map? (:view-state data)))
+                      :visible-revision (data/latest-revision (ctx))}
+          board (data/board-data (ctx) view-state)]
+      (is (map? board))
+      (is (= (data/latest-revision (ctx)) (:latest-revision board)))
+      (is (= (data/open-request-count (ctx)) (:open-count board)))
+      (is (= 0 (:pending-open-count board)))
+      (is (false? (:stale? board)))
+      (is (vector? (:requests board)))
+      (is (map? (:view-state board)))
       (is (= (:visible-revision view-state)
-             (get-in data [:view-state :visible-revision]))))))
+             (get-in board [:view-state :visible-revision]))))))
 
 (deftest board-data-new-request-visibility-test
   (testing "new requests are hidden from an older visible revision"
-    (let [visible-before (data/latest-revision)
+    (let [visible-before (data/latest-revision (ctx))
           {:keys [request revision]} (data/create-request!
+                                      (ctx)
                                       {:user user-owner
                                        :input (valid-input
                                                {:title "Hidden until refresh"})})
-          stale-board (data/board-data {:search ""
-                                         :visible-revision visible-before})
-          fresh-board (data/board-data {:search ""
-                                         :visible-revision revision})]
+          stale-board (data/board-data
+                       (ctx)
+                       {:search ""
+                        :visible-revision visible-before})
+          fresh-board (data/board-data
+                       (ctx)
+                       {:search ""
+                        :visible-revision revision})]
       (is (true? (:stale? stale-board)))
       (is (not (contains? (set (request-ids (:requests stale-board)))
                           (:request/id request))))
@@ -434,13 +492,16 @@
 (deftest board-data-existing-request-update-visibility-test
   (testing "an already-visible request remains visible after lifecycle updates"
     (let [open-request (seeded-open-request)
-          visible-before (data/latest-revision)
+          visible-before (data/latest-revision (ctx))
           result (data/claim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
-          stale-board (data/board-data {:search ""
-                                         :visible-revision visible-before})
-          updated (data/request-by-id (:request/id open-request))]
+          stale-board (data/board-data
+                       (ctx)
+                       {:search ""
+                        :visible-revision visible-before})
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status result)))
       (is (= :claimed (:request/status updated)))
       (is (contains? (set (request-ids (:requests stale-board)))
@@ -449,52 +510,63 @@
 (deftest board-data-search-test
   (testing "search filters requests across fields"
     (data/create-request!
+     (ctx)
      {:user user-owner
       :input (valid-input
               {:title "Need a purple snow shovel"
                :area "Seasonal"
                :details "Customer near front doors"
                :customer-name "Mina"})})
-    (let [latest (data/latest-revision)
-          board (data/board-data {:search "mina purple seasonal"
-                                   :visible-revision latest})]
+    (let [latest (data/latest-revision (ctx))
+          board (data/board-data
+                 (ctx)
+                 {:search "mina purple seasonal"
+                  :visible-revision latest})]
       (is (contains? (request-titles (:requests board))
                      "Need a purple snow shovel"))))
 
   (testing "missing terms exclude requests"
     (data/create-request!
+     (ctx)
      {:user user-owner
       :input (valid-input
               {:title "Need a purple snow shovel"
                :area "Seasonal"
                :details "Customer near front doors"
                :customer-name "Mina"})})
-    (let [latest (data/latest-revision)
-          board (data/board-data {:search "mina purple seasonal unicorn"
-                                   :visible-revision latest})]
+    (let [latest (data/latest-revision (ctx))
+          board (data/board-data
+                 (ctx)
+                 {:search "mina purple seasonal unicorn"
+                  :visible-revision latest})]
       (is (not (contains? (request-titles (:requests board))
                           "Need a purple snow shovel"))))))
 
 (deftest board-data-selection-test
   (testing "selected request id is preserved in normalized view state"
-    (let [some-request (first (data/all-requests))
-          data (data/board-data {:search ""
-                                  :selected-request-id (:request/id some-request)
-                                  :visible-revision (data/latest-revision)})]
+    (let [some-request (first (data/all-requests (ctx)))
+          board (data/board-data
+                 (ctx)
+                 {:search ""
+                  :selected-request-id (:request/id some-request)
+                  :visible-revision (data/latest-revision (ctx))})]
       (is (= (:request/id some-request)
-             (get-in data [:view-state :selected-request-id])))))
+             (get-in board [:view-state :selected-request-id])))))
 
   (testing "selected request id may refer to a request not currently visible"
-    (let [visible-before (data/latest-revision)
+    (let [visible-before (data/latest-revision (ctx))
           {:keys [request]} (data/create-request!
+                             (ctx)
                              {:user user-owner
                               :input (valid-input {:title "Not yet visible"})})
-          data (data/board-data {:search ""
-                                  :selected-request-id (:request/id request)
-                                  :visible-revision visible-before})]
+          board (data/board-data
+                 (ctx)
+                 {:search ""
+                  :selected-request-id (:request/id request)
+                  :visible-revision visible-before})]
       (is (= (:request/id request)
-             (get-in data [:view-state :selected-request-id])))
-      (is (not (contains? (set (request-ids (:requests data)))
+             (get-in board [:view-state :selected-request-id])))
+      (is (not (contains? (set (request-ids (:requests board)))
                           (:request/id request)))))))
 
 ;; -----------------------------------------------------------------------------
@@ -504,11 +576,12 @@
 (deftest claim-request-success-test
   (testing "non-owner can claim an open request"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/claim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status result)))
       (is (= open-request (:previous result)))
       (is (= updated (:request result)))
@@ -521,21 +594,24 @@
 (deftest claim-request-error-test
   (testing "owner cannot claim own open request"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/claim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user (owner-user-for open-request)})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision)))
-      (is (= open-request (data/request-by-id (:request/id open-request))))))
+      (is (= before-revision (data/latest-revision (ctx))))
+      (is (= open-request
+             (data/request-by-id (ctx) (:request/id open-request))))))
 
   (testing "missing request id returns error and does not advance revision"
-    (let [before-revision (data/latest-revision)
+    (let [before-revision (data/latest-revision (ctx))
           result (data/claim-request!
+                  (ctx)
                   {:request-id "missing"
                    :user user-helper})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision))))))
+      (is (= before-revision (data/latest-revision (ctx)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle transitions: unclaim
@@ -545,13 +621,15 @@
   (testing "claimer can unclaim a claimed request"
     (let [open-request (seeded-open-request)
           claim (data/claim-request!
+                 (ctx)
                  {:request-id (:request/id open-request)
                   :user user-helper})
-          before-unclaim (data/latest-revision)
+          before-unclaim (data/latest-revision (ctx))
           result (data/unclaim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status claim)))
       (is (= :ok (:status result)))
       (is (= (inc before-unclaim) (:revision result)))
@@ -563,20 +641,22 @@
   (testing "non-claimer cannot unclaim"
     (let [claimed-request (seeded-claimed-request)]
       (when claimed-request
-        (let [before-revision (data/latest-revision)
+        (let [before-revision (data/latest-revision (ctx))
               result (data/unclaim-request!
+                      (ctx)
                       {:request-id (:request/id claimed-request)
                        :user user-other})]
           (is (= :error (:status result)))
-          (is (= before-revision (data/latest-revision)))))))
+          (is (= before-revision (data/latest-revision (ctx))))))))
 
   (testing "missing request id returns error"
-    (let [before-revision (data/latest-revision)
+    (let [before-revision (data/latest-revision (ctx))
           result (data/unclaim-request!
+                  (ctx)
                   {:request-id "missing"
                    :user user-helper})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision))))))
+      (is (= before-revision (data/latest-revision (ctx)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle transitions: take over
@@ -587,13 +667,15 @@
     (let [claimed-request (or (seeded-claimed-request)
                               (:request
                                (data/claim-request!
+                                (ctx)
                                 {:request-id (:request/id (seeded-open-request))
                                  :user user-helper})))
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/take-over-request!
+                  (ctx)
                   {:request-id (:request/id claimed-request)
                    :user user-other})
-          updated (data/request-by-id (:request/id claimed-request))]
+          updated (data/request-by-id (ctx) (:request/id claimed-request))]
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
       (is (= :claimed (:request/status updated)))
@@ -605,24 +687,27 @@
     (let [claimed-request (or (seeded-claimed-request)
                               (:request
                                (data/claim-request!
+                                (ctx)
                                 {:request-id (:request/id (seeded-open-request))
                                  :user user-helper})))
           claimer (claimer-user-for claimed-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/take-over-request!
+                  (ctx)
                   {:request-id (:request/id claimed-request)
                    :user claimer})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision)))))
+      (is (= before-revision (data/latest-revision (ctx))))))
 
   (testing "open request cannot be taken over"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/take-over-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision))))))
+      (is (= before-revision (data/latest-revision (ctx)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle transitions: done
@@ -631,11 +716,12 @@
 (deftest mark-request-done-success-test
   (testing "owner can mark open request done"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/mark-request-done!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user (owner-user-for open-request)})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
       (is (= :done (:request/status updated)))
@@ -645,13 +731,15 @@
     (let [open-request (create-open-request!
                         {:title "Claimed request to mark done"})
           claim (data/claim-request!
+                 (ctx)
                  {:request-id (:request/id open-request)
                   :user user-helper})
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/mark-request-done!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status claim)))
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
@@ -660,22 +748,24 @@
 (deftest mark-request-done-error-test
   (testing "unrelated user cannot mark open request done"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/mark-request-done!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-other})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision)))))
+      (is (= before-revision (data/latest-revision (ctx))))))
 
   (testing "terminal request cannot be marked done again"
     (let [terminal (seeded-terminal-request)]
       (when terminal
-        (let [before-revision (data/latest-revision)
+        (let [before-revision (data/latest-revision (ctx))
               result (data/mark-request-done!
+                      (ctx)
                       {:request-id (:request/id terminal)
                        :user user-owner})]
           (is (= :error (:status result)))
-          (is (= before-revision (data/latest-revision))))))))
+          (is (= before-revision (data/latest-revision (ctx)))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle transitions: cancel
@@ -684,11 +774,12 @@
 (deftest cancel-request-success-test
   (testing "owner can cancel open request"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/cancel-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user (owner-user-for open-request)})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
       (is (= :cancelled (:request/status updated)))))
@@ -697,13 +788,15 @@
     (let [open-request (create-open-request!
                         {:title "Claimed request to cancel"})
           claim (data/claim-request!
+                 (ctx)
                  {:request-id (:request/id open-request)
                   :user user-helper})
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/cancel-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
-          updated (data/request-by-id (:request/id open-request))]
+          updated (data/request-by-id (ctx) (:request/id open-request))]
       (is (= :ok (:status claim)))
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
@@ -712,22 +805,24 @@
 (deftest cancel-request-error-test
   (testing "unrelated user cannot cancel open request"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
+          before-revision (data/latest-revision (ctx))
           result (data/cancel-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-other})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision)))))
+      (is (= before-revision (data/latest-revision (ctx))))))
 
   (testing "terminal request cannot be cancelled again"
     (let [terminal (seeded-terminal-request)]
       (when terminal
-        (let [before-revision (data/latest-revision)
+        (let [before-revision (data/latest-revision (ctx))
               result (data/cancel-request!
+                      (ctx)
                       {:request-id (:request/id terminal)
                        :user user-owner})]
           (is (= :error (:status result)))
-          (is (= before-revision (data/latest-revision))))))))
+          (is (= before-revision (data/latest-revision (ctx)))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Mutation invariants
@@ -738,13 +833,14 @@
     (let [open-request (seeded-open-request)
           before-requests-by-id (into {}
                                       (map (juxt :request/id identity))
-                                      (data/all-requests))
+                                      (data/all-requests (ctx)))
           result (data/claim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user user-helper})
           after-requests-by-id (into {}
                                      (map (juxt :request/id identity))
-                                     (data/all-requests))]
+                                     (data/all-requests (ctx)))]
       (is (= :ok (:status result)))
       (doseq [[id before] before-requests-by-id
               :when (not= id (:request/id open-request))]
@@ -754,31 +850,35 @@
 (deftest failed-transition-invariants-test
   (testing "failed transition does not change requests or revision"
     (let [open-request (seeded-open-request)
-          before-revision (data/latest-revision)
-          before-requests (data/all-requests)
+          before-revision (data/latest-revision (ctx))
+          before-requests (data/all-requests (ctx))
           result (data/claim-request!
+                  (ctx)
                   {:request-id (:request/id open-request)
                    :user (owner-user-for open-request)})]
       (is (= :error (:status result)))
-      (is (= before-revision (data/latest-revision)))
-      (is (= before-requests (data/all-requests))))))
+      (is (= before-revision (data/latest-revision (ctx))))
+      (is (= before-requests (data/all-requests (ctx)))))))
 
 (deftest revision-monotonicity-test
   (testing "successful mutations advance revision by one each"
-    (let [r0 (data/latest-revision)
+    (let [r0 (data/latest-revision (ctx))
           created (:request
                    (data/create-request!
+                    (ctx)
                     {:user user-owner
                      :input (valid-input {:title "Revision test"})}))
-          r1 (data/latest-revision)
+          r1 (data/latest-revision (ctx))
           claim-result (data/claim-request!
+                        (ctx)
                         {:request-id (:request/id created)
                          :user user-helper})
-          r2 (data/latest-revision)
+          r2 (data/latest-revision (ctx))
           done-result (data/mark-request-done!
+                       (ctx)
                        {:request-id (:request/id created)
                         :user user-helper})
-          r3 (data/latest-revision)]
+          r3 (data/latest-revision (ctx))]
       (is (= (inc r0) r1))
       (is (= :ok (:status claim-result)))
       (is (= (inc r1) r2))
@@ -791,24 +891,27 @@
 
 (deftest reset-after-many-mutations-test
   (testing "reset cleans up created and mutated data"
-    (let [initial-requests (data/all-requests)
-          initial-revision (data/latest-revision)
+    (let [initial-requests (data/all-requests (ctx))
+          initial-revision (data/latest-revision (ctx))
           created (:request
                    (data/create-request!
+                    (ctx)
                     {:user user-owner
                      :input (valid-input {:title "Request to disappear"})}))]
       (data/claim-request!
+       (ctx)
        {:request-id (:request/id created)
         :user user-helper})
       (data/mark-request-done!
+       (ctx)
        {:request-id (:request/id created)
         :user user-helper})
-      (is (not= initial-revision (data/latest-revision)))
+      (is (not= initial-revision (data/latest-revision (ctx))))
       (is (some #(= (:request/id created) (:request/id %))
-                (data/all-requests)))
+                (data/all-requests (ctx))))
 
-      (data/reset-demo-state!)
+      (data/reset-demo-state! (ctx))
 
-      (is (= initial-revision (data/latest-revision)))
-      (is (= initial-requests (data/all-requests)))
-      (is (nil? (data/request-by-id (:request/id created)))))))
+      (is (= initial-revision (data/latest-revision (ctx))))
+      (is (= initial-requests (data/all-requests (ctx))))
+      (is (nil? (data/request-by-id (ctx) (:request/id created)))))))
