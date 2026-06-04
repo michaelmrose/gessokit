@@ -61,6 +61,7 @@
        (get-in ctx [:user :email])
        (get-in ctx [:session :uid])
        (get-in ctx [:session :user])
+       (get-in ctx [:session :email])
        "demo-user")))
 
 (defn current-user-email
@@ -230,7 +231,7 @@
   "Return connected client ids in scope, excluding all clients owned by user-id."
   [scope user-id]
   (let [excluded-user-id (some-> user-id str)]
-    (->> (connected-clients)
+    (->> (live-client/connected-clients)
          (keep
           (fn [[client-id client]]
             (when (and (client-in-scope? scope client)
@@ -356,10 +357,6 @@
 ;; -----------------------------------------------------------------------------
 ;; Introspection
 ;; -----------------------------------------------------------------------------
-
-(defn connected-clients
-  []
-  (live-client/connected-clients channel))
 
 (defn connected-client-ids
   []
