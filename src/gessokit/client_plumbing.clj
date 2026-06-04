@@ -231,6 +231,19 @@
   "Return connected client ids in scope, excluding all clients owned by user-id."
   [scope user-id]
   (let [excluded-user-id (some-> user-id str)]
+    (->> (live-client/connected-clients channel)
+         (keep
+          (fn [[client-id client]]
+            (when (and (client-in-scope? scope client)
+                       (not= excluded-user-id
+                             (client-user-id client)))
+              client-id)))
+         vec)))
+
+#_(defn target-client-ids-for-scope-except-user
+  "Return connected client ids in scope, excluding all clients owned by user-id."
+  [scope user-id]
+  (let [excluded-user-id (some-> user-id str)]
     (->> (live-client/connected-clients)
          (keep
           (fn [[client-id client]]
