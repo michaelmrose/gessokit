@@ -18,9 +18,9 @@
    [gesso.core :as g]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
+   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.views :as views]))
 
 ;; -----------------------------------------------------------------------------
@@ -60,6 +60,7 @@
 (defn- normalized-render-view-state
   [ctx]
   (data/normalize-view-state
+   ctx
    (render-view-state ctx)))
 
 ;; -----------------------------------------------------------------------------
@@ -81,7 +82,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (data/toolbar-data view-state)
+     (data/toolbar-data ctx view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))
@@ -90,7 +91,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (data/board-data view-state)
+     (data/board-data ctx view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))
@@ -304,7 +305,7 @@
   {:topic topic
 
    ;; Gesso Live's generic source/invalidation routing is keyed by :topic + :id.
-   ;; Keep :store/id as domain context, but also provide :id explicitly.
+   ;; Keep :store/id as model context, but also provide :id explicitly.
    :id store-id
    :store/id store-id})
 

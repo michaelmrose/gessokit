@@ -16,10 +16,10 @@
    [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.model :as model]
-   [gessokit.humanhelp.live :as app-live]
-   [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.data :as data]
+   [gessokit.humanhelp.live :as app-live]
+   [gessokit.humanhelp.model :as model]
+   [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
    [gessokit.middleware :as mid])
   (:import
@@ -192,8 +192,8 @@
    - :visible-revision
 
    :visible-revision controls the 'new data available, click refresh' behavior.
-   A nil visible revision is normalized to latest by data/live code for initial
-   page loads."
+   A nil visible revision is normalized to the latest known revision before
+   rendering."
   [ctx]
   {:search (or (param ctx :q) "")
    :selected-request-id (param ctx :selected)
@@ -289,17 +289,17 @@
 
    This keeps the hidden selected/visible-revision state in sync after actions
    that change board state outside the search form itself."
-  [view-state]
+  [ctx view-state]
   (g/oob-outer-html
    views/board-state-form-id
    (views/search-control
-    {:view-state (data/normalize-view-state view-state)})))
+    {:view-state (data/normalize-view-state ctx view-state)})))
 
 (defn with-board-state-oob
-  [node view-state]
+  [ctx node view-state]
   (views/oob-response
    node
-   (board-state-form-oob view-state)))
+   (board-state-form-oob ctx view-state)))
 
 ;; -----------------------------------------------------------------------------
 ;; Render helpers
@@ -309,6 +309,7 @@
   [ctx]
   (let [user       (current-user ctx)
         view-state (data/normalize-view-state
+                    ctx
                     (request-view-state ctx))]
     (merge
      {:user user
@@ -399,6 +400,28 @@
    (fragment-render-options ctx)))
 
 ;; -----------------------------------------------------------------------------
+;; Best-effort side effects
+;; -----------------------------------------------------------------------------
+
+(defn send-new-request-toast-safely!
+  [request user]
+  (try
+    (app-live/send-new-request-toast!
+     request
+     {:actor user})
+    (catch Exception e
+      (println "[humanhelp] send-new-request-toast! failed"
+               {:message (.getMessage e)}))))
+
+(defn send-reset-toast-safely!
+  []
+  (try
+    (app-live/send-reset-toast!)
+    (catch Exception e
+      (println "[humanhelp] send-reset-toast! failed"
+               {:message (.getMessage e)}))))
+
+;; -----------------------------------------------------------------------------
 ;; Request creation
 ;; -----------------------------------------------------------------------------
 
@@ -410,6 +433,7 @@
         request-list (render-list-node ctx view-state')]
     (html
      (with-board-state-oob
+       ctx
        (views/create-request-success
         ctx
         {:user user
@@ -427,7 +451,7 @@
    - visible list refreshes to include the new request
 
    Other connected users:
-   - receive a toast through Human Help live notification helpers
+   - receive a best-effort toast through Human Help live notification helpers
    - receive toolbar/count/stale indicator through model-backed Live
    - their list does not jump until they refresh"
   [ctx]
@@ -445,6 +469,7 @@
 
       (let [{:keys [request revision]}
             (data/create-request!
+             ctx
              {:user user
               :input input})]
 
@@ -456,8 +481,7 @@
            :revision revision
            :actor user}))
 
-        #_(app-live/send-new-request-toast! request)
-        (app-live/send-new-request-toast! request {:actor user})
+        (send-new-request-toast-safely! request user)
 
         (create-request-success-response
          ctx
@@ -474,9 +498,10 @@
   [ctx]
   (let [view-state (assoc (request-view-state ctx)
                           :visible-revision
-                          (data/latest-revision))]
+                          (data/latest-revision ctx))]
     (html
      (with-board-state-oob
+       ctx
        (views/refreshed-request-board-fragments
         ctx
         (board-oob ctx view-state))
@@ -488,11 +513,19 @@
   (request-list-fragment ctx))
 
 (defn select-request
-  "Render the request list with one selected/expanded card and sync board state."
+  "Render the request list with one selected/expanded card and sync board state.
+
+   The selected request id comes from the route path, not the submitted
+   board-state form. The board-state form may still contain the previous
+   selected value because stable live wrappers include it during fragment
+   refreshes."
   [ctx]
-  (let [view-state (request-view-state ctx)]
+  (let [view-state (assoc (request-view-state ctx)
+                          :selected-request-id
+                          (request-id ctx))]
     (html
      (with-board-state-oob
+       ctx
        (render-list-node ctx view-state)
        view-state))))
 
@@ -510,7 +543,7 @@
      :done
      :cancel
 
-   store-fn receives:
+   transition-fn receives ctx and:
      {:request-id ...
       :user ...}
 
@@ -519,12 +552,13 @@
 
    or:
      {:status :error ...}"
-  [ctx action store-fn]
+  [ctx action transition-fn]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
         id         (request-id ctx)
-        result     (store-fn {:request-id id
-                              :user user})]
+        result     (transition-fn ctx
+                                  {:request-id id
+                                   :user user})]
     (if (= :ok (:status result))
       (let [{:keys [request revision previous]} result]
         (app-live/notify!
@@ -539,6 +573,7 @@
 
         (html
          (with-board-state-oob
+           ctx
            (views/request-lifecycle-result
             ctx
             (merge
@@ -602,7 +637,7 @@
 (defn reset-demo!
   [ctx]
   (let [user       (current-user ctx)
-        result     (data/reset-demo-state!)
+        result     (data/reset-demo-state! ctx)
         view-state (assoc (request-view-state ctx)
                           :visible-revision
                           (:revision result))]
@@ -613,10 +648,11 @@
       {:revision (:revision result)
        :actor user}))
 
-    (app-live/send-reset-toast!)
+    (send-reset-toast-safely!)
 
     (html
      (with-board-state-oob
+       ctx
        (views/reset-demo-result
         ctx
         (merge

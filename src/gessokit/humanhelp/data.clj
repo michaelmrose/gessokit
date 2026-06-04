@@ -1,20 +1,48 @@
 (ns gessokit.humanhelp.data
-  "Atom-backed fake persistence for the Human Help analogue.
+  "XTDB-backed data boundary for the Human Help analogue.
 
-   This namespace owns mutable demo state and request lifecycle mutations.
+   This namespace owns Human Help request/event persistence and request
+   lifecycle mutations.
 
    It intentionally does not know about:
-   - Ring/Biff ctx
    - Gesso Live
    - Hiccup/UI
    - routes
    - client plumbing
 
-   The point is to make this namespace replaceable later with XTDB-backed
-   persistence while keeping the rest of the app shape mostly intact."
+   It deliberately knows about Ring/Biff ctx now, because XTDB/Biff connection
+   and node handles are carried there.
+
+   Public data functions are ctx-first:
+
+     (all-requests ctx)
+     (request-by-id ctx request-id)
+     (create-request! ctx {:user ... :input ...})
+     (claim-request! ctx {:request-id ... :user ...})
+     (board-data ctx view-state)
+
+   app.clj, live.clj, and tests must be updated after this hard break."
   (:require
    [clojure.string :as str]
-   [gessokit.humanhelp.model :as model]))
+   [com.biffweb.experimental :as biffx]
+   [gessokit.humanhelp.model :as model]
+   [xtdb.api :as xt]))
+
+;; -----------------------------------------------------------------------------
+;; XTDB tables / ids
+;; -----------------------------------------------------------------------------
+
+(def request-table
+  :humanhelp_requests)
+
+(def event-table
+  :humanhelp_events)
+
+(def store-table
+  :humanhelp_stores)
+
+(def store-doc-id
+  (str "humanhelp-store/" model/store-id))
 
 ;; -----------------------------------------------------------------------------
 ;; IDs
@@ -36,7 +64,7 @@
   "Fixed demo clock used only for seeded/reset state.
 
    Keeping this fixed makes reset-demo-state! deterministic, which is useful for
-   tests and for reasoning about the demo store. Runtime-created requests and
+   tests and[object Object],[object Object],[object Object],[object Object] for reasoning about the demo store. Runtime-created requests and
    lifecycle events still use model/now-ms."
   1780471110000)
 
@@ -74,6 +102,7 @@
 (defn seeded-event
   [{:keys [number kind message request-id created-offset-ms revision]}]
   {:event/id (event-id number)
+   :event/store-id model/store-id
    :event/kind kind
    :event/message message
    :event/request-id request-id
@@ -148,45 +177,278 @@
                 :created-offset-ms (* 44 60000)
                 :revision 3})]}))
 
-(defonce !state
-  (atom (initial-state)))
+;; -----------------------------------------------------------------------------
+;; Context / XTDB helpers
+;; -----------------------------------------------------------------------------
+
+(defn queryable-from-ctx
+  [ctx]
+  (or (:biff/conn ctx)
+      (:biff/db ctx)
+      (:biff/node ctx)
+      (:xtdb/node ctx)
+      (throw
+       (ex-info "Human Help data requires :biff/conn, :biff/db, :biff/node, or :xtdb/node for reads."
+                {:ctx-keys (when (map? ctx)
+                             (set (keys ctx)))}))))
+
+(defn tx-connectable-from-ctx
+  [ctx]
+  (or (:biff/node ctx)
+      (:xtdb/node ctx)
+      (:biff/conn ctx)
+      (throw
+       (ex-info "Human Help data requires :biff/node, :xtdb/node, or :biff/conn for writes."
+                {:ctx-keys (when (map? ctx)
+                             (set (keys ctx)))}))))
+
+(defn q
+  [ctx query]
+  (biffx/q (queryable-from-ctx ctx) query))
+
+(defn execute-tx!
+  [ctx tx-ops]
+  (let [tx-ops (vec (remove nil? tx-ops))]
+    (when (seq tx-ops)
+      (xt/execute-tx
+       (tx-connectable-from-ctx ctx)
+       tx-ops))))
+
+;; -----------------------------------------------------------------------------
+;; XTDB doc conversion
+;; -----------------------------------------------------------------------------
+
+(def request-fields
+  [:xt/id
+   :request/id
+   :request/number
+   :request/store-id
+   :request/title
+   :request/area
+   :request/details
+   :request/customer-user-id
+   :request/customer-name
+   :request/status
+   :request/claimed-by
+   :request/claimed-by-email
+   :request/created-at-ms
+   :request/updated-at-ms
+   :request/created-revision
+   :request/updated-revision])
+
+(def event-fields
+  [:xt/id
+   :event/id
+   :event/store-id
+   :event/kind
+   :event/message
+   :event/request-id
+   :event/action
+   :event/at-ms
+   :event/revision])
+
+(def store-fields
+  [:xt/id
+   :store/id
+   :store/name
+   :store/revision
+   :store/next-request-number
+   :store/next-event-number])
+
+(defn request->doc
+  [request]
+  (assoc request :xt/id (:request/id request)))
+
+(defn doc->request
+  [doc]
+  (dissoc doc :xt/id))
+
+(defn event->doc
+  [event]
+  (assoc event :xt/id (:event/id event)))
+
+(defn doc->event
+  [doc]
+  (dissoc doc :xt/id))
+
+(defn state->store-doc
+  [state]
+  {:xt/id store-doc-id
+   :store/id model/store-id
+   :store/name model/store-name
+   :store/revision (:revision state)
+   :store/next-request-number (:next-request-number state)
+   :store/next-event-number (:next-event-number state)})
+
+(defn put-doc-ops
+  [table docs]
+  (mapv
+   (fn [doc]
+     [:put-docs table doc])
+   docs))
+
+(defn delete-doc-ops
+  [table ids]
+  (mapv
+   (fn [id]
+     [:delete-docs table id])
+   ids))
+
+(defn doc-ids
+  [docs]
+  (set (keep :xt/id docs)))
+
+;; -----------------------------------------------------------------------------
+;; Low-level queries
+;; -----------------------------------------------------------------------------
+
+(defn store-docs
+  [ctx]
+  (q ctx
+     {:select store-fields
+      :from store-table
+      :where [:= :store/id model/store-id]}))
+
+(defn store-meta-doc
+  [ctx]
+  (first (store-docs ctx)))
+
+(defn request-docs
+  [ctx]
+  (q ctx
+     {:select request-fields
+      :from request-table
+      :where [:= :request/store-id model/store-id]}))
+
+(defn event-docs
+  [ctx]
+  (q ctx
+     {:select event-fields
+      :from event-table
+      :where [:= :event/store-id model/store-id]}))
+
+;; -----------------------------------------------------------------------------
+;; Whole-state persistence
+;; -----------------------------------------------------------------------------
+
+(defn state-docs
+  [state]
+  {:store-docs [(state->store-doc state)]
+   :request-docs (mapv request->doc
+                       (vals (:requests state)))
+   :event-docs (mapv event->doc
+                     (:events state))})
+
+(defn replace-doc-ops
+  "Build ops that make the Human Help XTDB tables match state for this demo
+   store id.
+
+   This is intentionally simple and demo-oriented. It re-puts the desired docs
+   and deletes old Human Help docs that no longer exist in the desired state.
+   That preserves atom-store semantics such as keeping only the most recent
+   events."
+  [ctx state]
+  (let [{desired-store-docs :store-docs
+         desired-request-docs :request-docs
+         desired-event-docs :event-docs} (state-docs state)
+
+        existing-store-docs  (store-docs ctx)
+        existing-request-docs (request-docs ctx)
+        existing-event-docs   (event-docs ctx)
+
+        desired-store-ids   (doc-ids desired-store-docs)
+        desired-request-ids (doc-ids desired-request-docs)
+        desired-event-ids   (doc-ids desired-event-docs)
+
+        delete-store-ids   (remove desired-store-ids
+                                    (doc-ids existing-store-docs))
+        delete-request-ids (remove desired-request-ids
+                                    (doc-ids existing-request-docs))
+        delete-event-ids   (remove desired-event-ids
+                                    (doc-ids existing-event-docs))]
+    (concat
+     (delete-doc-ops store-table delete-store-ids)
+     (delete-doc-ops request-table delete-request-ids)
+     (delete-doc-ops event-table delete-event-ids)
+     (put-doc-ops store-table desired-store-docs)
+     (put-doc-ops request-table desired-request-docs)
+     (put-doc-ops event-table desired-event-docs))))
+
+(defn persist-state!
+  [ctx state]
+  (execute-tx! ctx (replace-doc-ops ctx state)))
+
+(defn seed-state!
+  [ctx]
+  (let [new-state (initial-state)]
+    (persist-state! ctx new-state)
+    {:status :ok
+     :revision (:revision new-state)
+     :state new-state}))
+
+(defn ensure-seeded!
+  "Seed the demo store when no Human Help store metadata document exists.
+
+   This makes first load usable after a fresh database. reset-demo-state! still
+   performs an explicit replace with the deterministic seed state."
+  [ctx]
+  (when-not (store-meta-doc ctx)
+    (seed-state! ctx)))
 
 ;; -----------------------------------------------------------------------------
 ;; State helpers
 ;; -----------------------------------------------------------------------------
 
 (defn state
-  []
-  @!state)
+  [ctx]
+  (ensure-seeded! ctx)
+  (let [meta-doc (store-meta-doc ctx)
+        requests (->> (request-docs ctx)
+                      (map doc->request)
+                      (sort-by :request/number)
+                      vec)
+        events   (->> (event-docs ctx)
+                      (map doc->event)
+                      (sort-by :event/at-ms >)
+                      vec)]
+    {:revision (:store/revision meta-doc)
+     :next-request-number (:store/next-request-number meta-doc)
+     :next-event-number (:store/next-event-number meta-doc)
+     :requests (into {}
+                     (map (juxt :request/id identity))
+                     requests)
+     :events events}))
 
 (defn latest-revision
-  []
-  (:revision @!state))
+  [ctx]
+  (:revision (state ctx)))
 
 (defn next-revision
   [state]
   (inc (or (:revision state) 0)))
 
 (defn all-requests
-  []
-  (->> (:requests @!state)
+  [ctx]
+  (->> (:requests (state ctx))
        vals
+       (sort-by :request/number)
        vec))
 
 (defn request-by-id
-  [request-id]
-  (get-in @!state [:requests request-id]))
+  [ctx request-id]
+  (get-in (state ctx) [:requests request-id]))
 
 (defn all-events
-  []
-  (->> (:events @!state)
+  [ctx]
+  (->> (:events (state ctx))
        (sort-by :event/at-ms >)
        vec))
 
 (defn recent-events
-  ([] (recent-events 20))
-  ([n]
-   (take n (all-events))))
+  ([ctx]
+   (recent-events ctx 20))
+  ([ctx n]
+   (take n (all-events ctx))))
 
 (defn board-requests
   "Return visible request cards for a view-state.
@@ -194,33 +456,33 @@
    view-state keys are defined in gessokit.humanhelp.model:
      :search
      :visible-revision"
-  [view-state]
+  [ctx view-state]
   (model/visible-board-requests
-   (all-requests)
+   (all-requests ctx)
    view-state))
 
 (defn open-request-count
-  []
-  (model/open-request-count (all-requests)))
+  [ctx]
+  (model/open-request-count (all-requests ctx)))
 
 (defn pending-open-request-count
-  [visible-revision]
+  [ctx visible-revision]
   (model/pending-open-request-count
-   (all-requests)
+   (all-requests ctx)
    visible-revision))
 
 (defn board-stale?
-  [visible-revision]
+  [ctx visible-revision]
   (model/board-stale?
    visible-revision
-   (latest-revision)))
+   (latest-revision ctx)))
 
 (defn summary
-  []
-  (let [requests (all-requests)]
+  [ctx]
+  (let [requests (all-requests ctx)]
     {:store/id model/store-id
      :store/name model/store-name
-     :revision (latest-revision)
+     :revision (latest-revision ctx)
      :total (count requests)
      :open (model/open-request-count requests)
      :pending-open (fn [visible-revision]
@@ -230,30 +492,34 @@
      :by-status (frequencies (map :request/status requests))}))
 
 ;; -----------------------------------------------------------------------------
-;; Atomic update helper
+;; State update helpers
 ;; -----------------------------------------------------------------------------
 
 (defn update-state!
-  "Atomically update !state.
+  "Read current XTDB-backed state, compute a new state/result pair, persist the
+   new state, then return result.
 
    f receives old-state and must return:
 
      [new-state result]
 
-   result is returned after the compare-and-set succeeds."
-  [f]
-  (loop []
-    (let [old @!state
-          [new result] (f old)]
-      (if (compare-and-set! !state old new)
-        result
-        (recur)))))
+   This keeps the old atom-backed result shapes but deliberately does not yet
+   implement optimistic retry/precondition logic for contended concurrent writes.
+   That is acceptable for this removable demo analogue; it can be tightened
+   later if the example needs to demonstrate concurrent write handling."
+  [ctx f]
+  (let [old-state    (state ctx)
+        [new result] (f old-state)]
+    (when-not (= old-state new)
+      (persist-state! ctx new))
+    result))
 
 (defn add-event
   [state kind message data]
   (let [number (:next-event-number state)
         event  (merge
                 {:event/id (event-id number)
+                 :event/store-id model/store-id
                  :event/kind kind
                  :event/message message
                  :event/at-ms (model/now-ms)
@@ -324,6 +590,7 @@
   "Create a request from already-normalized and validated input.
 
    Args:
+     ctx
      {:user ...
       :input ...}
 
@@ -331,7 +598,7 @@
      {:status :ok
       :request ...
       :revision ...}"
-  [{:keys [user input] :as args}]
+  [ctx {:keys [user input] :as args}]
   (when-not user
     (throw
      (ex-info "create-request! requires :user."
@@ -341,6 +608,7 @@
      (ex-info "create-request! requires :input."
               {:args args})))
   (update-state!
+   ctx
    #(create-request-state % args)))
 
 ;; -----------------------------------------------------------------------------
@@ -425,45 +693,51 @@
               :action action)])))
 
 (defn transition-request!
-  [args]
+  [ctx args]
   (update-state!
+   ctx
    #(transition-request-state % args)))
 
 (defn claim-request!
-  [{:keys [request-id user] :as args}]
+  [ctx {:keys [request-id user] :as args}]
   (transition-request!
+   ctx
    (assoc args
           :request-id request-id
           :user user
           :action :claim)))
 
 (defn unclaim-request!
-  [{:keys [request-id user] :as args}]
+  [ctx {:keys [request-id user] :as args}]
   (transition-request!
+   ctx
    (assoc args
           :request-id request-id
           :user user
           :action :unclaim)))
 
 (defn take-over-request!
-  [{:keys [request-id user] :as args}]
+  [ctx {:keys [request-id user] :as args}]
   (transition-request!
+   ctx
    (assoc args
           :request-id request-id
           :user user
           :action :take-over)))
 
 (defn mark-request-done!
-  [{:keys [request-id user] :as args}]
+  [ctx {:keys [request-id user] :as args}]
   (transition-request!
+   ctx
    (assoc args
           :request-id request-id
           :user user
           :action :done)))
 
 (defn cancel-request!
-  [{:keys [request-id user] :as args}]
+  [ctx {:keys [request-id user] :as args}]
   (transition-request!
+   ctx
    (assoc args
           :request-id request-id
           :user user
@@ -478,8 +752,8 @@
 
    Initial load starts at latest, so the board does not immediately think it is
    stale."
-  []
-  (latest-revision))
+  [ctx]
+  (latest-revision ctx))
 
 (defn normalize-search
   [search]
@@ -495,7 +769,7 @@
       selected')))
 
 (defn normalize-view-state
-  "Fill default view-state values from current store state.
+  "Fill default view-state values from current persisted Human Help data.
 
    If :visible-revision is nil, it is set to the latest revision. This makes
    initial page loads stable while still allowing explicit older revisions to
@@ -505,21 +779,21 @@
      {:search ...
       :selected-request-id ...
       :visible-revision ...}"
-  [view-state]
+  [ctx view-state]
   (let [view-state' (or view-state {})]
     {:search (normalize-search (:search view-state'))
      :selected-request-id (normalize-selected-request-id
                            (:selected-request-id view-state'))
      :visible-revision (if (some? (:visible-revision view-state'))
                          (:visible-revision view-state')
-                         (initial-visible-revision))}))
+                         (initial-visible-revision ctx))}))
 
 (defn board-data
   "Return the data needed to render the request board for view-state."
-  [view-state]
-  (let [view-state'      (normalize-view-state view-state)
-        requests         (all-requests)
-        latest-revision' (latest-revision)
+  [ctx view-state]
+  (let [view-state'      (normalize-view-state ctx view-state)
+        requests         (all-requests ctx)
+        latest-revision' (latest-revision ctx)
         visible-revision (:visible-revision view-state')]
     {:store/id model/store-id
      :store/name model/store-name
@@ -537,10 +811,10 @@
 
 (defn toolbar-data
   "Return the data needed to render the request toolbar."
-  [view-state]
-  (let [view-state'      (normalize-view-state view-state)
-        requests         (all-requests)
-        latest-revision' (latest-revision)
+  [ctx view-state]
+  (let [view-state'      (normalize-view-state ctx view-state)
+        requests         (all-requests ctx)
+        latest-revision' (latest-revision ctx)
         visible-revision (:visible-revision view-state')]
     {:store/id model/store-id
      :store/name model/store-name
@@ -558,9 +832,9 @@
 ;; -----------------------------------------------------------------------------
 
 (defn reset-demo-state!
-  []
+  [ctx]
   (let [new-state (initial-state)]
-    (reset! !state new-state)
+    (persist-state! ctx new-state)
     {:status :ok
-     :revision (:revision new-state)
+    :revision (:revision new-state)
      :state new-state}))
