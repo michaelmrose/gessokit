@@ -531,8 +531,9 @@
         before-revision (store/latest-revision)]
     (with-redefs [hh-live/notify! (recording-notify notified)
                   hh-live/send-new-request-toast!
-                  (fn [request]
-                    (swap! toasted conj request)
+                  (fn [request & [opts]]
+                    (swap! toasted conj {:request request
+                                         :opts opts})
                     {:sent 1})]
       (let [ctx (assoc base-ctx
                        :params (valid-create-params
@@ -546,11 +547,13 @@
         (is (= 1 (count @notified)))
         (is (= 1 (count @toasted)))
 
-        (let [created (first @toasted)]
-          (is (= "Need gloves" (:request/title created)))
-          (is (= "Garden" (:request/area created)))
-          (is (= "Large gloves" (:request/details created)))
-          (is (= "Avery" (:request/customer-name created))))
+        (let [{:keys [request opts]} (first @toasted)]
+          (is (= "Need gloves" (:request/title request)))
+          (is (= "Garden" (:request/area request)))
+          (is (= "Large gloves" (:request/details request)))
+          (is (= "Avery" (:request/customer-name request)))
+          (is (= {:actor (app/current-user ctx)}
+                 opts)))
 
         (let [[live-system ctx' change] (first @notified)]
           (is (= ::live-system live-system))

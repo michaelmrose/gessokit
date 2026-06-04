@@ -117,7 +117,7 @@
 
 (defn request-toast-recorder
   [calls]
-  (fn [request]
+  (fn [request & _opts]
     (swap! calls conj request)
     {:sent 1}))
 

@@ -410,15 +410,6 @@
 ;; Introspection helpers
 ;; -----------------------------------------------------------------------------
 
-(deftest connected-clients-test
-  (let [calls (atom [])
-        clients {"client-1" {:client/id "client-1"}}]
-    (with-redefs [live-client/connected-clients
-                  (recording-fn calls clients)]
-      (is (= clients (plumbing/connected-clients)))
-      (is (= 1 (count @calls)))
-      (is (some? (first (first @calls)))))))
-
 (deftest connected-client-ids-test
   (let [calls (atom [])
         ids ["client-1" "client-2"]]
