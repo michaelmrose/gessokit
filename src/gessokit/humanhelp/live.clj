@@ -18,7 +18,7 @@
    [gesso.core :as g]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
    [gessokit.humanhelp.views :as views]))
@@ -28,7 +28,7 @@
 ;; -----------------------------------------------------------------------------
 
 (def store-id
-  domain/store-id)
+  model/store-id)
 
 (def notification-scope
   "Connected-browser scope used for Human Help page-global notifications.
@@ -358,7 +358,7 @@
   []
   (merge
    (store-change-base :clock/minute)
-   {:at-ms (domain/now-ms)}))
+   {:at-ms (model/now-ms)}))
 
 (defn demo-reset-change
   [{:keys [revision actor]}]
@@ -378,7 +378,7 @@
    (or (:request/customer-name request) "Someone")
    " added request #"
    (:request/number request)
-   (when (domain/present? (:request/title request))
+   (when (model/present? (:request/title request))
      (str ": " (:request/title request)))))
 
 (defn send-new-request-toast!

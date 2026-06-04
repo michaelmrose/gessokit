@@ -3,7 +3,7 @@
 
    This namespace intentionally stays thin. It wires together:
 
-   - gessokit.humanhelp.domain
+   - gessokit.humanhelp.model
    - gessokit.humanhelp.store
    - gessokit.humanhelp.views
    - gessokit.humanhelp.live
@@ -16,7 +16,7 @@
    [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as app-live]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
@@ -197,7 +197,7 @@
   [ctx]
   {:search (or (param ctx :q) "")
    :selected-request-id (param ctx :selected)
-   :visible-revision (domain/parse-visible-revision
+   :visible-revision (model/parse-visible-revision
                       (param ctx :visible-revision))})
 
 (defn html
@@ -433,8 +433,8 @@
   [ctx]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
-        input      (domain/parse-create-request-input (:params ctx))
-        errors     (domain/create-request-errors input)]
+        input      (model/parse-create-request-input (:params ctx))
+        errors     (model/create-request-errors input)]
     (if (seq errors)
       (html
        (views/create-request-validation-error

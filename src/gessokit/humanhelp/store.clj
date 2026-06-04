@@ -14,7 +14,7 @@
    persistence while keeping the rest of the app shape mostly intact."
   (:require
    [clojure.string :as str]
-   [gessokit.humanhelp.domain :as domain]))
+   [gessokit.humanhelp.model :as model]))
 
 ;; -----------------------------------------------------------------------------
 ;; IDs
@@ -37,7 +37,7 @@
 
    Keeping this fixed makes reset-demo-state! deterministic, which is useful for
    tests and for reasoning about the demo store. Runtime-created requests and
-   lifecycle events still use domain/now-ms."
+   lifecycle events still use model/now-ms."
   1780471110000)
 
 (defn seeded-request
@@ -57,7 +57,7 @@
         revision'  (or revision number)]
     {:request/id id
      :request/number number
-     :request/store-id domain/store-id
+     :request/store-id model/store-id
      :request/title title
      :request/area area
      :request/details details
@@ -191,40 +191,40 @@
 (defn board-requests
   "Return visible request cards for a view-state.
 
-   view-state keys are defined in gessokit.humanhelp.domain:
+   view-state keys are defined in gessokit.humanhelp.model:
      :search
      :visible-revision"
   [view-state]
-  (domain/visible-board-requests
+  (model/visible-board-requests
    (all-requests)
    view-state))
 
 (defn open-request-count
   []
-  (domain/open-request-count (all-requests)))
+  (model/open-request-count (all-requests)))
 
 (defn pending-open-request-count
   [visible-revision]
-  (domain/pending-open-request-count
+  (model/pending-open-request-count
    (all-requests)
    visible-revision))
 
 (defn board-stale?
   [visible-revision]
-  (domain/board-stale?
+  (model/board-stale?
    visible-revision
    (latest-revision)))
 
 (defn summary
   []
   (let [requests (all-requests)]
-    {:store/id domain/store-id
-     :store/name domain/store-name
+    {:store/id model/store-id
+     :store/name model/store-name
      :revision (latest-revision)
      :total (count requests)
-     :open (domain/open-request-count requests)
+     :open (model/open-request-count requests)
      :pending-open (fn [visible-revision]
-                     (domain/pending-open-request-count
+                     (model/pending-open-request-count
                       requests
                       visible-revision))
      :by-status (frequencies (map :request/status requests))}))
@@ -256,7 +256,7 @@
                 {:event/id (event-id number)
                  :event/kind kind
                  :event/message message
-                 :event/at-ms (domain/now-ms)
+                 :event/at-ms (model/now-ms)
                  :event/revision (:revision state)}
                 data)]
     (-> state
@@ -285,17 +285,17 @@
   (let [revision      (next-revision state)
         number        (:next-request-number state)
         id            (request-id number)
-        now           (domain/now-ms)
+        now           (model/now-ms)
         customer-name (or (:customer-name input)
-                          (domain/user-email user)
-                          (domain/user-id user))
+                          (model/user-email user)
+                          (model/user-id user))
         request       {:request/id id
                        :request/number number
-                       :request/store-id domain/store-id
+                       :request/store-id model/store-id
                        :request/title (:title input)
                        :request/area (:area input)
                        :request/details (:details input)
-                       :request/customer-user-id (domain/user-id user)
+                       :request/customer-user-id (model/user-id user)
                        :request/customer-name customer-name
                        :request/status :open
                        :request/claimed-by nil
@@ -358,8 +358,8 @@
 
 (defn transition-message
   [action user request]
-  (let [email (or (domain/user-email user)
-                  (domain/user-id user))]
+  (let [email (or (model/user-email user)
+                  (model/user-id user))]
     (case action
       :claim
       (str email
@@ -400,11 +400,11 @@
   [state {:keys [request-id action user]}]
   (let [request  (get-in state [:requests request-id])
         revision (next-revision state)
-        result   (domain/transition-request
+        result   (model/transition-request
                   request
                   action
                   user
-                  {:now-ms (domain/now-ms)
+                  {:now-ms (model/now-ms)
                    :revision revision})]
     (if (= :ok (:status result))
       (let [request' (:request result)]
@@ -521,17 +521,17 @@
         requests         (all-requests)
         latest-revision' (latest-revision)
         visible-revision (:visible-revision view-state')]
-    {:store/id domain/store-id
-     :store/name domain/store-name
+    {:store/id model/store-id
+     :store/name model/store-name
      :view-state view-state'
      :latest-revision latest-revision'
      :visible-revision visible-revision
-     :stale? (domain/board-stale? visible-revision latest-revision')
-     :open-count (domain/open-request-count requests)
-     :pending-open-count (domain/pending-open-request-count
+     :stale? (model/board-stale? visible-revision latest-revision')
+     :open-count (model/open-request-count requests)
+     :pending-open-count (model/pending-open-request-count
                           requests
                           visible-revision)
-     :requests (domain/visible-board-requests
+     :requests (model/visible-board-requests
                 requests
                 view-state')}))
 
@@ -542,14 +542,14 @@
         requests         (all-requests)
         latest-revision' (latest-revision)
         visible-revision (:visible-revision view-state')]
-    {:store/id domain/store-id
-     :store/name domain/store-name
+    {:store/id model/store-id
+     :store/name model/store-name
      :view-state view-state'
      :latest-revision latest-revision'
      :visible-revision visible-revision
-     :stale? (domain/board-stale? visible-revision latest-revision')
-     :open-count (domain/open-request-count requests)
-     :pending-open-count (domain/pending-open-request-count
+     :stale? (model/board-stale? visible-revision latest-revision')
+     :open-count (model/open-request-count requests)
+     :pending-open-count (model/pending-open-request-count
                           requests
                           visible-revision)}))
 

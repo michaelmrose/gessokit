@@ -14,7 +14,7 @@
    [clojure.string :as str]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.ui :as ui]))
 
@@ -49,7 +49,7 @@
 
 (defn status-label
   [request]
-  (domain/request-status-label request))
+  (model/request-status-label request))
 
 (defn status-pill-status
   [request]
@@ -147,7 +147,7 @@
   (form-action
    ctx
    {:to (routes/action-url (:request/id request) action)
-    :text (domain/action-label action)
+    :text (model/action-label action)
     :variant (case action
                :done :primary
                :claim :primary
@@ -399,11 +399,11 @@
    [:span {:class "font-body text-xs-theme"
            :style {:color "var(--muted-foreground)"}}
     "waiting "
-    (domain/waiting-label request)]])
+    (model/waiting-label request)]])
 
 (defn request-card-actions
   [ctx request user view-state]
-  (let [actions (domain/available-actions request user)]
+  (let [actions (model/available-actions request user)]
     (when (seq actions)
       (into
        [:div {:class "cluster-theme items-center justify-end"}]
@@ -447,7 +447,7 @@
 
      (when selected?
        [:div {:class "content-stack-theme"}
-        (when (domain/present? (:request/details request))
+        (when (model/present? (:request/details request))
           [:p {:class "font-body text-sm-theme leading-body"}
            (:request/details request)])
 
@@ -456,10 +456,10 @@
 (defn empty-request-list
   [{:keys [view-state]}]
   (g/empty-state
-   {:title (if (domain/present? (:search view-state))
+   {:title (if (model/present? (:search view-state))
              "No matching requests"
              "No requests yet")
-    :description (if (domain/present? (:search view-state))
+    :description (if (model/present? (:search view-state))
                    "Try fewer words or a different person, area, request, or status."
                    "Create a request with the plus button to start the demo.")
     :icon (g/empty-state-icon)}))
@@ -706,8 +706,8 @@
      (g/render-toast-oob
       {:variant :success
        :duration 2500
-       :title (domain/action-label action)
-       :description (domain/action-result-message action request)}))))
+       :title (model/action-label action)
+       :description (model/action-result-message action request)}))))
 
 (defn request-action-error
   [_ctx {:keys [result]}]

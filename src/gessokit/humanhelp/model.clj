@@ -1,4 +1,4 @@
-(ns gessokit.humanhelp.domain
+(ns gessokit.humanhelp.model
   "Pure Human Help domain rules.
 
    This namespace owns:
