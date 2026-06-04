@@ -3,7 +3,7 @@
    [clojure.test :refer [deftest is testing use-fixtures]]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
@@ -53,7 +53,7 @@
   (merge
    {:request/id "hh-req-99"
     :request/number 99
-    :request/store-id domain/store-id
+    :request/store-id model/store-id
     :request/title "Need help finding a rake"
     :request/area "Garden"
     :request/details "Looking for a sturdy rake for leaves."
@@ -130,7 +130,7 @@
 
 (deftest constants-test
   (testing "store id is shared with domain"
-    (is (= domain/store-id hh-live/store-id)))
+    (is (= model/store-id hh-live/store-id)))
 
   (testing "notification scope is currently the generic app-wide client scope"
     (is (= client-plumbing/app-scope hh-live/notification-scope))))
@@ -151,7 +151,7 @@
 
 (deftest allow-demo-store-test
   (testing "the demo store is authorized"
-    (is (true? (hh-live/allow-demo-store? ctx domain/store-id))))
+    (is (true? (hh-live/allow-demo-store? ctx model/store-id))))
 
   (testing "any other store id is rejected"
     (is (false? (hh-live/allow-demo-store? ctx "other-store")))
@@ -167,9 +167,9 @@
                           :view-state {:search ""
                                        :visible-revision (store/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-toolbar-query render-ctx domain/store-id)]
+          data (hh-live/request-toolbar-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
-      (is (= domain/store-id (:store/id data)))
+      (is (= model/store-id (:store/id data)))
       (is (= user-owner (:user data)))
       (is (= (store/latest-revision) (:latest-revision data)))
       (is (= (store/open-request-count) (:open-count data)))
@@ -185,7 +185,7 @@
                             :view-state {:search ""
                                          :visible-revision visible-before}}
             render-ctx (#'hh-live/with-render-options ctx render-options)
-            data (hh-live/request-toolbar-query render-ctx domain/store-id)]
+            data (hh-live/request-toolbar-query render-ctx model/store-id)]
         (assert-render-ctx (:ctx data) render-options)
         (is (true? (:stale? data)))
         (is (= 1 (:pending-open-count data)))))))
@@ -196,9 +196,9 @@
                           :view-state {:search ""
                                        :visible-revision (store/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-list-query render-ctx domain/store-id)]
+          data (hh-live/request-list-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
-      (is (= domain/store-id (:store/id data)))
+      (is (= model/store-id (:store/id data)))
       (is (= user-owner (:user data)))
       (is (= (store/latest-revision) (:latest-revision data)))
       (is (vector? (:requests data)))
@@ -216,7 +216,7 @@
                           :view-state {:search "purple mina seasonal"
                                        :visible-revision (store/latest-revision)}}
           render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-list-query render-ctx domain/store-id)]
+          data (hh-live/request-list-query render-ctx model/store-id)]
       (assert-render-ctx (:ctx data) render-options)
       (is (some #(= "Need a purple snow shovel" (:request/title %))
                 (:requests data))))))
@@ -300,7 +300,7 @@
         (let [[compiled fragment-name id opts] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-toolbar fragment-name))
-          (is (= domain/store-id id))
+          (is (= model/store-id id))
           (is (= (hh-live/fragment-options :request-toolbar view-state)
                  opts))))))
 
@@ -316,7 +316,7 @@
         (let [[compiled fragment-name id opts] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-list fragment-name))
-          (is (= domain/store-id id))
+          (is (= model/store-id id))
           (is (= (hh-live/fragment-options :request-list view-state)
                  opts)))))))
 
@@ -355,7 +355,7 @@
         (let [[compiled ctx' fragment-name id] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-toolbar fragment-name))
-          (is (= domain/store-id id))
+          (is (= model/store-id id))
           (is (= render-options (#'hh-live/render-options ctx')))
           (is (= ctx (dissoc ctx' ::hh-live/render-options))))))))
 
@@ -379,7 +379,7 @@
         (let [[compiled ctx' fragment-name id] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-list fragment-name))
-          (is (= domain/store-id id))
+          (is (= model/store-id id))
           (is (= render-options (#'hh-live/render-options ctx'))))))))
 
 (deftest stream-response-helper-test
@@ -408,7 +408,7 @@
           (is (= live-system live-system'))
           (is (= hh-live/compiled-live compiled))
           (is (= :request-toolbar fragment-name))
-          (is (= domain/store-id id))
+          (is (= model/store-id id))
           (is (= render-options (#'hh-live/render-options ctx')))
           (is (= {:flow-options {:relieve? true}}
                  options))))))
@@ -447,7 +447,7 @@
                  :revision 4
                  :actor user-owner})]
     (is (= :request/created (:topic change)))
-    (is (= domain/store-id (:store/id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :open (:request/status change)))
@@ -486,7 +486,7 @@
                  :revision 5
                  :actor user-helper})]
     (is (= :request/claimed (:topic change)))
-    (is (= domain/store-id (:store/id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :claimed (:request/status change)))
@@ -501,7 +501,7 @@
         change (hh-live/minute-tick-change)
         after (System/currentTimeMillis)]
     (is (= :clock/minute (:topic change)))
-    (is (= domain/store-id (:store/id change)))
+    (is (= model/store-id (:store/id change)))
     (is (integer? (:at-ms change)))
     (is (<= before (:at-ms change) after))))
 
@@ -510,7 +510,7 @@
                 {:revision 9
                  :actor user-owner})]
     (is (= :humanhelp-demo/reset (:topic change)))
-    (is (= domain/store-id (:store/id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= 9 (:revision change)))
     (is (= "user-owner" (:actor/id change)))
     (is (= "owner@example.com" (:actor/email change)))))
@@ -619,7 +619,7 @@
     (let [calls (atom [])
           live-system ::live-system
           change {:topic :request/created
-                  :store/id domain/store-id}]
+                  :store/id model/store-id}]
       (with-redefs [live/submit-expanded!
                     (fn [& args]
                       (swap! calls conj args)

@@ -3,7 +3,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [gessokit.humanhelp.app :as app]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
@@ -559,7 +559,7 @@
           (is (= ::live-system live-system))
           (is (= ctx ctx'))
           (is (= :request/created (:topic change)))
-          (is (= domain/store-id (:store/id change))))
+          (is (= model/store-id (:store/id change))))
 
         (is (response-oob? response views/request-toolbar-dom-id))
         (is (response-oob? response views/request-list-dom-id))

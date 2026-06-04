@@ -1,8 +1,8 @@
-(ns gessokit.humanhelp.domain-test
+(ns gessokit.humanhelp.model-test
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [malli.core :as m]))
 
 ;; -----------------------------------------------------------------------------
@@ -26,7 +26,7 @@
   (merge
    {:request/id "hh-req-1"
     :request/number 1
-    :request/store-id domain/store-id
+    :request/store-id model/store-id
     :request/title "Need help finding a rake"
     :request/area "Garden"
     :request/details "Looking for a sturdy rake for bark and leaves."
@@ -59,25 +59,25 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest constants-test
-  (is (= "demo-store" domain/store-id))
-  (is (= "Human Help" domain/store-name))
-  (is (= #{:open :claimed :done :cancelled} domain/statuses))
-  (is (= #{:open :claimed} domain/open-statuses))
-  (is (= #{:done :cancelled} domain/terminal-statuses))
+  (is (= "demo-store" model/store-id))
+  (is (= "Human Help" model/store-name))
+  (is (= #{:open :claimed :done :cancelled} model/statuses))
+  (is (= #{:open :claimed} model/open-statuses))
+  (is (= #{:done :cancelled} model/terminal-statuses))
   (is (= [:claim :unclaim :take-over :done :cancel]
-         domain/lifecycle-actions))
-  (doseq [limit [domain/request-title-max
-                 domain/request-area-max
-                 domain/request-details-max
-                 domain/request-customer-name-max]]
+         model/lifecycle-actions))
+  (doseq [limit [model/request-title-max
+                 model/request-area-max
+                 model/request-details-max
+                 model/request-customer-name-max]]
     (is (integer? limit))
     (is (pos? limit))))
 
 (deftest schemas-test
-  (is (true? (m/validate domain/user-schema user-owner)))
-  (is (false? (m/validate domain/user-schema {:user/id "x"})))
-  (is (true? (m/validate domain/request-schema (req {}))))
-  (is (false? (m/validate domain/request-schema
+  (is (true? (m/validate model/user-schema user-owner)))
+  (is (false? (m/validate model/user-schema {:user/id "x"})))
+  (is (true? (m/validate model/request-schema (req {}))))
+  (is (false? (m/validate model/request-schema
                           (dissoc (req {}) :request/id)))))
 
 ;; -----------------------------------------------------------------------------
@@ -85,56 +85,56 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest present-test
-  (is (false? (domain/present? nil)))
-  (is (false? (domain/present? "")))
-  (is (false? (domain/present? "   ")))
-  (is (true? (domain/present? "x")))
-  (is (true? (domain/present? "  x  ")))
-  (is (true? (domain/present? 0)))
-  (is (true? (domain/present? false))))
+  (is (false? (model/present? nil)))
+  (is (false? (model/present? "")))
+  (is (false? (model/present? "   ")))
+  (is (true? (model/present? "x")))
+  (is (true? (model/present? "  x  ")))
+  (is (true? (model/present? 0)))
+  (is (true? (model/present? false))))
 
 (deftest trim-value-test
-  (is (nil? (domain/trim-value nil)))
-  (is (= "" (domain/trim-value "")))
-  (is (= "" (domain/trim-value "   ")))
-  (is (= "abc" (domain/trim-value "  abc  ")))
-  (is (= "123" (domain/trim-value 123))))
+  (is (nil? (model/trim-value nil)))
+  (is (= "" (model/trim-value "")))
+  (is (= "" (model/trim-value "   ")))
+  (is (= "abc" (model/trim-value "  abc  ")))
+  (is (= "123" (model/trim-value 123))))
 
 (deftest blank->nil-test
-  (is (nil? (domain/blank->nil nil)))
-  (is (nil? (domain/blank->nil "")))
-  (is (nil? (domain/blank->nil "   ")))
-  (is (= "x" (domain/blank->nil "x")))
-  (is (= "  x  " (domain/blank->nil "  x  "))))
+  (is (nil? (model/blank->nil nil)))
+  (is (nil? (model/blank->nil "")))
+  (is (nil? (model/blank->nil "   ")))
+  (is (= "x" (model/blank->nil "x")))
+  (is (= "  x  " (model/blank->nil "  x  "))))
 
 (deftest request-param-test
   (let [params {:title "keyword title"
                 "area" "string area"}]
-    (is (= "keyword title" (domain/request-param params :title)))
-    (is (= "string area" (domain/request-param params :area)))
-    (is (nil? (domain/request-param params :missing)))))
+    (is (= "keyword title" (model/request-param params :title)))
+    (is (= "string area" (model/request-param params :area)))
+    (is (nil? (model/request-param params :missing)))))
 
 (deftest parse-long-value-test
-  (is (nil? (domain/parse-long-value nil)))
-  (is (nil? (domain/parse-long-value "")))
-  (is (nil? (domain/parse-long-value "   ")))
-  (is (nil? (domain/parse-long-value "abc")))
-  (is (nil? (domain/parse-long-value "1.5")))
-  (is (= 0 (domain/parse-long-value "0")))
-  (is (= 42 (domain/parse-long-value "42")))
-  (is (= -2 (domain/parse-long-value "-2")))
-  (is (= 7 (domain/parse-long-value 7))))
+  (is (nil? (model/parse-long-value nil)))
+  (is (nil? (model/parse-long-value "")))
+  (is (nil? (model/parse-long-value "   ")))
+  (is (nil? (model/parse-long-value "abc")))
+  (is (nil? (model/parse-long-value "1.5")))
+  (is (= 0 (model/parse-long-value "0")))
+  (is (= 42 (model/parse-long-value "42")))
+  (is (= -2 (model/parse-long-value "-2")))
+  (is (= 7 (model/parse-long-value 7))))
 
 (deftest parse-visible-revision-test
-  (is (nil? (domain/parse-visible-revision nil)))
-  (is (nil? (domain/parse-visible-revision "")))
-  (is (nil? (domain/parse-visible-revision "abc")))
-  (is (= 3 (domain/parse-visible-revision "3")))
-  (is (= 3 (domain/parse-visible-revision 3))))
+  (is (nil? (model/parse-visible-revision nil)))
+  (is (nil? (model/parse-visible-revision "")))
+  (is (nil? (model/parse-visible-revision "abc")))
+  (is (= 3 (model/parse-visible-revision "3")))
+  (is (= 3 (model/parse-visible-revision 3))))
 
 (deftest now-ms-test
   (let [before (System/currentTimeMillis)
-        n (domain/now-ms)
+        n (model/now-ms)
         after (System/currentTimeMillis)]
     (is (integer? n))
     (is (<= before n after))))
@@ -143,50 +143,50 @@
   (is (= {:a 1
           :c false
           :d ""}
-         (domain/compact-map
+         (model/compact-map
           {:a 1
            :b nil
            :c false
            :d ""}))))
 
 (deftest normalize-token-test
-  (is (nil? (domain/normalize-token nil)))
-  (is (= "" (domain/normalize-token "")))
-  (is (= "garden" (domain/normalize-token " Garden ")))
-  (is (= ":open" (domain/normalize-token :open))))
+  (is (nil? (model/normalize-token nil)))
+  (is (= "" (model/normalize-token "")))
+  (is (= "garden" (model/normalize-token " Garden ")))
+  (is (= ":open" (model/normalize-token :open))))
 
 (deftest label-helpers-test
-  (is (= "" (domain/sentence-case "")))
-  (is (= "" (domain/sentence-case nil)))
-  (is (= "Open" (domain/sentence-case "open")))
-  (is (= "Open" (domain/labelize :open)))
-  (is (= "Take over" (domain/labelize :take-over)))
-  (is (= "Already done" (domain/labelize "already-done"))))
+  (is (= "" (model/sentence-case "")))
+  (is (= "" (model/sentence-case nil)))
+  (is (= "Open" (model/sentence-case "open")))
+  (is (= "Open" (model/labelize :open)))
+  (is (= "Take over" (model/labelize :take-over)))
+  (is (= "Already done" (model/labelize "already-done"))))
 
 ;; -----------------------------------------------------------------------------
 ;; Users
 ;; -----------------------------------------------------------------------------
 
 (deftest user-accessors-test
-  (is (= "user-owner" (domain/user-id user-owner)))
-  (is (= "owner@example.com" (domain/user-email user-owner)))
-  (is (nil? (domain/user-id {:user/email "fallback@example.com"})))
-  (is (= 123 (domain/user-id {:user/id 123})))
-  (is (nil? (domain/user-email {:user/id "user-only"}))))
+  (is (= "user-owner" (model/user-id user-owner)))
+  (is (= "owner@example.com" (model/user-email user-owner)))
+  (is (nil? (model/user-id {:user/email "fallback@example.com"})))
+  (is (= 123 (model/user-id {:user/id 123})))
+  (is (nil? (model/user-email {:user/id "user-only"}))))
 
 (deftest same-user-test
-  (is (true? (domain/same-user? "1" "1")))
-  (is (true? (domain/same-user? 1 "1")))
-  (is (true? (domain/same-user? :a ":a")))
-  (is (false? (domain/same-user? "1" "2")))
-  (is (false? (domain/same-user? nil "x"))))
+  (is (true? (model/same-user? "1" "1")))
+  (is (true? (model/same-user? 1 "1")))
+  (is (true? (model/same-user? :a ":a")))
+  (is (false? (model/same-user? "1" "2")))
+  (is (false? (model/same-user? nil "x"))))
 
 ;; -----------------------------------------------------------------------------
 ;; Create-request input parsing and validation
 ;; -----------------------------------------------------------------------------
 
 (deftest parse-create-request-input-test
-  (let [parsed (domain/parse-create-request-input
+  (let [parsed (model/parse-create-request-input
                 {"title" "  Need a rake  "
                  "area" " Garden "
                  "details" " Near aisle 4 "
@@ -197,7 +197,7 @@
             :customer-name "Jon"}
            parsed)))
 
-  (let [parsed (domain/parse-create-request-input
+  (let [parsed (model/parse-create-request-input
                 {:title " Need gloves "
                  :area " Hardware "
                  :details " Large work gloves "
@@ -208,7 +208,7 @@
             :customer-name "Avery"}
            parsed)))
 
-  (let [parsed (domain/parse-create-request-input
+  (let [parsed (model/parse-create-request-input
                 {:title " Need a rake "
                  :area " Garden "
                  :details "   "
@@ -219,16 +219,16 @@
             :customer-name nil}
            parsed)))
 
-  (let [parsed (domain/parse-create-request-input
+  (let [parsed (model/parse-create-request-input
                 {:title "Need paint"
                  :area "Paint"
                  :name " Morgan "})]
     (is (= "Morgan" (:customer-name parsed)))))
 
 (deftest create-request-errors-test
-  (is (nil? (domain/create-request-errors (valid-input {}))))
+  (is (nil? (model/create-request-errors (valid-input {}))))
 
-  (let [errors (domain/create-request-errors
+  (let [errors (model/create-request-errors
                 (valid-input {:title ""
                               :area "   "}))]
     (is (= "A short request is required."
@@ -236,37 +236,20 @@
     (is (= "Choose or describe an area of the store."
            (:area errors))))
 
-  (let [errors (domain/create-request-errors
+  (let [errors (model/create-request-errors
                 (valid-input
-                 {:title (apply str (repeat (inc domain/request-title-max) "x"))
-                  :area (apply str (repeat (inc domain/request-area-max) "x"))
-                  :details (apply str (repeat (inc domain/request-details-max) "x"))
-                  :customer-name (apply str (repeat (inc domain/request-customer-name-max) "x"))}))]
-    (is (= (str "Use " domain/request-title-max " characters or fewer.")
+                 {:title (apply str (repeat (inc model/request-title-max) "x"))
+                  :area (apply str (repeat (inc model/request-area-max) "x"))
+                  :details (apply str (repeat (inc model/request-details-max) "x"))
+                  :customer-name (apply str (repeat (inc model/request-customer-name-max) "x"))}))]
+    (is (= (str "Use " model/request-title-max " characters or fewer.")
            (:title errors)))
-    (is (= (str "Use " domain/request-area-max " characters or fewer.")
+    (is (= (str "Use " model/request-area-max " characters or fewer.")
            (:area errors)))
-    (is (= (str "Use " domain/request-details-max " characters or fewer.")
+    (is (= (str "Use " model/request-details-max " characters or fewer.")
            (:details errors)))
-    (is (= (str "Use " domain/request-customer-name-max " characters or fewer.")
+    (is (= (str "Use " model/request-customer-name-max " characters or fewer.")
            (:customer-name errors)))))
-
-;; (deftest valid-create-request-input-test
-;;   (is (true? (domain/valid-create-request-input? (valid-input {}))))
-
-;;   (testing "blank strings currently satisfy the raw Malli predicate"
-;;     (is (true? (domain/valid-create-request-input?
-;;                 (valid-input {:area "   "}))))
-;;     (is (= "Choose or describe an area of the store."
-;;            (:area (domain/create-request-errors
-;;                    (valid-input {:area "   "))))))
-
-;;   (is (false? (domain/valid-create-request-input?
-;;                (valid-input {:title ""}))))
-
-;;   (is (true? (domain/valid-create-request-input?
-;;               (valid-input {:details nil
-;;                             :customer-name nil})))))
 
 (deftest valid-create-request-input-test
   (let [normal-input (valid-input {})
@@ -274,52 +257,52 @@
         empty-title-input (valid-input {:title ""})
         optional-nil-input (valid-input {:details nil
                                          :customer-name nil})
-        blank-area-errors (domain/create-request-errors blank-area-input)]
+        blank-area-errors (model/create-request-errors blank-area-input)]
 
-    (is (true? (domain/valid-create-request-input? normal-input)))
+    (is (true? (model/valid-create-request-input? normal-input)))
 
     (testing "blank strings currently satisfy the raw Malli predicate"
-      (is (true? (domain/valid-create-request-input? blank-area-input)))
+      (is (true? (model/valid-create-request-input? blank-area-input)))
       (is (= "Choose or describe an area of the store."
              (:area blank-area-errors))))
 
-    (is (false? (domain/valid-create-request-input? empty-title-input)))
+    (is (false? (model/valid-create-request-input? empty-title-input)))
 
-    (is (true? (domain/valid-create-request-input? optional-nil-input)))))
+    (is (true? (model/valid-create-request-input? optional-nil-input)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request model helpers
 ;; -----------------------------------------------------------------------------
 
 (deftest request-state-predicates-test
-  (is (true? (domain/request-open? (req {:request/status :open}))))
-  (is (true? (domain/request-open? (req {:request/status :claimed}))))
-  (is (false? (domain/request-open? (req {:request/status :done}))))
-  (is (false? (domain/request-open? (req {:request/status :cancelled}))))
+  (is (true? (model/request-open? (req {:request/status :open}))))
+  (is (true? (model/request-open? (req {:request/status :claimed}))))
+  (is (false? (model/request-open? (req {:request/status :done}))))
+  (is (false? (model/request-open? (req {:request/status :cancelled}))))
 
-  (is (false? (domain/request-terminal? (req {:request/status :open}))))
-  (is (false? (domain/request-terminal? (req {:request/status :claimed}))))
-  (is (true? (domain/request-terminal? (req {:request/status :done}))))
-  (is (true? (domain/request-terminal? (req {:request/status :cancelled})))))
+  (is (false? (model/request-terminal? (req {:request/status :open}))))
+  (is (false? (model/request-terminal? (req {:request/status :claimed}))))
+  (is (true? (model/request-terminal? (req {:request/status :done}))))
+  (is (true? (model/request-terminal? (req {:request/status :cancelled})))))
 
 (deftest request-ownership-test
   (let [r (req {:request/customer-user-id "user-owner"
                 :request/status :claimed
                 :request/claimed-by "user-helper"
                 :request/claimed-by-email "helper@example.com"})]
-    (is (true? (domain/request-owner? user-owner r)))
-    (is (false? (domain/request-owner? user-helper r)))
-    (is (true? (domain/request-claimed? r)))
-    (is (true? (domain/request-claimed-by-user? user-helper r)))
-    (is (false? (domain/request-claimed-by-user? user-owner r)))
-    (is (true? (domain/request-claimed-by-other? user-owner r)))
-    (is (false? (domain/request-claimed-by-other? user-helper r)))))
+    (is (true? (model/request-owner? user-owner r)))
+    (is (false? (model/request-owner? user-helper r)))
+    (is (true? (model/request-claimed? r)))
+    (is (true? (model/request-claimed-by-user? user-helper r)))
+    (is (false? (model/request-claimed-by-user? user-owner r)))
+    (is (true? (model/request-claimed-by-other? user-owner r)))
+    (is (false? (model/request-claimed-by-other? user-helper r)))))
 
 (deftest request-labels-test
-  (is (= "Open" (domain/request-status-label (req {:request/status :open}))))
-  (is (= "Claimed" (domain/request-status-label (req {:request/status :claimed}))))
-  (is (= "Done" (domain/request-status-label (req {:request/status :done}))))
-  (is (= "Cancelled" (domain/request-status-label (req {:request/status :cancelled})))))
+  (is (= "Open" (model/request-status-label (req {:request/status :open}))))
+  (is (= "Claimed" (model/request-status-label (req {:request/status :claimed}))))
+  (is (= "Done" (model/request-status-label (req {:request/status :done}))))
+  (is (= "Cancelled" (model/request-status-label (req {:request/status :cancelled})))))
 
 (deftest request-counts-and-revisions-test
   (let [requests [(req {:request/id "open"
@@ -331,9 +314,9 @@
                   (req {:request/id "done"
                         :request/status :done
                         :request/updated-revision 4})]]
-    (is (= 2 (domain/open-request-count requests)))
-    (is (= 8 (domain/newest-revision requests)))
-    (is (= 0 (domain/newest-revision [])))))
+    (is (= 2 (model/open-request-count requests)))
+    (is (= 8 (model/newest-revision requests)))
+    (is (= 0 (model/newest-revision [])))))
 
 ;; -----------------------------------------------------------------------------
 ;; Visibility and board freshness
@@ -346,16 +329,16 @@
         newly-created (req {:request/id "new"
                             :request/created-revision 4
                             :request/updated-revision 4})]
-    (is (true? (domain/request-visible-at-revision? 3 existing)))
-    (is (false? (domain/request-visible-at-revision? 3 newly-created)))
-    (is (true? (domain/request-visible-at-revision? 4 newly-created)))
-    (is (true? (domain/request-visible-at-revision? nil newly-created)))))
+    (is (true? (model/request-visible-at-revision? 3 existing)))
+    (is (false? (model/request-visible-at-revision? 3 newly-created)))
+    (is (true? (model/request-visible-at-revision? 4 newly-created)))
+    (is (true? (model/request-visible-at-revision? nil newly-created)))))
 
 (deftest board-stale-test
-  (is (false? (domain/board-stale? nil 10)))
-  (is (true? (domain/board-stale? 9 10)))
-  (is (false? (domain/board-stale? 10 10)))
-  (is (false? (domain/board-stale? 11 10))))
+  (is (false? (model/board-stale? nil 10)))
+  (is (true? (model/board-stale? 9 10)))
+  (is (false? (model/board-stale? 10 10)))
+  (is (false? (model/board-stale? 11 10))))
 
 (deftest pending-open-request-count-test
   (let [requests [(req {:request/id "old-open"
@@ -376,22 +359,22 @@
                   (req {:request/id "new-cancelled"
                         :request/status :cancelled
                         :request/created-revision 7})]]
-    (is (= 2 (domain/pending-open-request-count requests 3)))
-    (is (= 0 (domain/pending-open-request-count requests nil)))
-    (is (= 0 (domain/pending-open-request-count requests 5)))))
+    (is (= 2 (model/pending-open-request-count requests 3)))
+    (is (= 0 (model/pending-open-request-count requests nil)))
+    (is (= 0 (model/pending-open-request-count requests 5)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Search
 ;; -----------------------------------------------------------------------------
 
 (deftest parse-search-test
-  (is (= [] (domain/parse-search nil)))
-  (is (= [] (domain/parse-search "")))
-  (is (= [] (domain/parse-search "   ")))
+  (is (= [] (model/parse-search nil)))
+  (is (= [] (model/parse-search "")))
+  (is (= [] (model/parse-search "   ")))
   (is (= ["jon" "rake" "garden"]
-         (domain/parse-search " Jon   rake Garden ")))
+         (model/parse-search " Jon   rake Garden ")))
   (is (= ["jon" "rake"]
-         (domain/parse-search "jon jon rake"))))
+         (model/parse-search "jon jon rake"))))
 
 (deftest request-search-fields-test
   (let [r (req {:request/status :claimed
@@ -403,20 +386,20 @@
             "Jon"
             "helper@example.com"
             "Claimed"]
-           (domain/request-search-fields r)))
-    (is (str/includes? (domain/request-search-text r)
+           (model/request-search-fields r)))
+    (is (str/includes? (model/request-search-text r)
                        "helper@example.com"))))
 
 (deftest request-matches-search-test
   (let [r (req {})]
-    (is (true? (domain/request-matches-search? r nil)))
-    (is (true? (domain/request-matches-search? r "")))
-    (is (true? (domain/request-matches-search? r "jon rake garden")))
-    (is (true? (domain/request-matches-search? r "jon bark rake garden")))
-    (is (true? (domain/request-matches-search? r "JON GARDEN")))
-    (is (true? (domain/request-matches-search? r "rak gar jon")))
-    (is (false? (domain/request-matches-search? r "jon purple rake garden")))
-    (is (false? (domain/request-matches-search? r "rak gar xyz")))))
+    (is (true? (model/request-matches-search? r nil)))
+    (is (true? (model/request-matches-search? r "")))
+    (is (true? (model/request-matches-search? r "jon rake garden")))
+    (is (true? (model/request-matches-search? r "jon bark rake garden")))
+    (is (true? (model/request-matches-search? r "JON GARDEN")))
+    (is (true? (model/request-matches-search? r "rak gar jon")))
+    (is (false? (model/request-matches-search? r "jon purple rake garden")))
+    (is (false? (model/request-matches-search? r "rak gar xyz")))))
 
 (deftest filter-requests-test
   (let [r1 (req {:request/id "r1"
@@ -432,12 +415,12 @@
                  :request/area "Garden"
                  :request/created-revision 5})]
     (is (= ["r1"]
-           (ids (domain/filter-requests
+           (ids (model/filter-requests
                  [r1 r2 r3]
                  {:search "garden"
                   :visible-revision 3}))))
     (is (= ["r1" "r3"]
-           (ids (domain/filter-requests
+           (ids (model/filter-requests
                  [r1 r2 r3]
                  {:search "garden"
                   :visible-revision nil}))))))
@@ -463,7 +446,7 @@
                         :request/status :cancelled
                         :request/updated-at-ms 6000})]
     (is (= ["open-new" "open-old" "claimed" "done" "cancelled"]
-           (ids (domain/sort-requests-for-board
+           (ids (model/sort-requests-for-board
                  [cancelled done open-new claimed open-old]))))))
 
 (deftest visible-board-requests-test
@@ -492,12 +475,12 @@
                  :request/updated-at-ms 4000
                  :request/created-revision 4})]
     (is (= ["r1" "r3"]
-           (ids (domain/visible-board-requests
+           (ids (model/visible-board-requests
                  [r1 r2 r3 r4]
                  {:search "garden"
                   :visible-revision 3}))))
     (is (= ["r4" "r1" "r3"]
-           (ids (domain/visible-board-requests
+           (ids (model/visible-board-requests
                  [r1 r2 r3 r4]
                  {:search "garden"
                   :visible-revision 4}))))))
@@ -507,28 +490,28 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest elapsed-minutes-test
-  (is (= 0 (domain/elapsed-minutes 1000 1000)))
-  (is (= 0 (domain/elapsed-minutes 1000 59999)))
-  (is (= 1 (domain/elapsed-minutes 1000 61000)))
-  (is (= 17 (domain/elapsed-minutes 0 (* 17 60000))))
-  (is (= 0 (domain/elapsed-minutes 10000 1000))))
+  (is (= 0 (model/elapsed-minutes 1000 1000)))
+  (is (= 0 (model/elapsed-minutes 1000 59999)))
+  (is (= 1 (model/elapsed-minutes 1000 61000)))
+  (is (= 17 (model/elapsed-minutes 0 (* 17 60000))))
+  (is (= 0 (model/elapsed-minutes 10000 1000))))
 
 (deftest waiting-label-test
   (let [now 10000000]
     (is (= "just now"
-           (domain/waiting-label (req {:request/created-at-ms now}) now)))
+           (model/waiting-label (req {:request/created-at-ms now}) now)))
     (is (= "just now"
-           (domain/waiting-label (req {:request/created-at-ms (- now 59000)}) now)))
+           (model/waiting-label (req {:request/created-at-ms (- now 59000)}) now)))
     (is (= "1 min"
-           (domain/waiting-label (req {:request/created-at-ms (- now 60000)}) now)))
+           (model/waiting-label (req {:request/created-at-ms (- now 60000)}) now)))
     (is (= "17 min"
-           (domain/waiting-label (req {:request/created-at-ms (- now (* 17 60000))}) now)))
+           (model/waiting-label (req {:request/created-at-ms (- now (* 17 60000))}) now)))
     (is (= "59 min"
-           (domain/waiting-label (req {:request/created-at-ms (- now (* 59 60000))}) now)))
+           (model/waiting-label (req {:request/created-at-ms (- now (* 59 60000))}) now)))
     (is (= "1 hr"
-           (domain/waiting-label (req {:request/created-at-ms (- now (* 60 60000))}) now)))
+           (model/waiting-label (req {:request/created-at-ms (- now (* 60 60000))}) now)))
     (is (= "2 hr"
-           (domain/waiting-label (req {:request/created-at-ms (- now (* 125 60000))}) now)))))
+           (model/waiting-label (req {:request/created-at-ms (- now (* 125 60000))}) now)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Available actions and errors
@@ -536,64 +519,64 @@
 
 (deftest available-actions-test
   (is (= [:done :cancel]
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :open
                 :request/customer-user-id "user-owner"})
           user-owner)))
 
   (is (= [:claim]
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :open
                 :request/customer-user-id "user-owner"})
           user-helper)))
 
   (is (= [:done :unclaim :cancel]
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :claimed
                 :request/customer-user-id "user-owner"
                 :request/claimed-by "user-helper"})
           user-helper)))
 
   (is (= [:take-over]
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :claimed
                 :request/customer-user-id "user-owner"
                 :request/claimed-by "user-helper"})
           user-owner)))
 
   (is (= []
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :done})
           user-owner)))
 
   (is (= []
-         (domain/available-actions
+         (model/available-actions
           (req {:request/status :cancelled})
           user-owner))))
 
 (deftest action-available-test
   (let [open-owned (req {:request/status :open
                          :request/customer-user-id "user-owner"})]
-    (is (true? (domain/action-available? open-owned user-owner :done)))
-    (is (false? (domain/action-available? open-owned user-owner :claim)))))
+    (is (true? (model/action-available? open-owned user-owner :done)))
+    (is (false? (model/action-available? open-owned user-owner :claim)))))
 
 (deftest transition-error-test
   (is (= :humanhelp/request-not-found
-         (:error/type (domain/transition-error nil :claim user-helper))))
+         (:error/type (model/transition-error nil :claim user-helper))))
 
   (is (= :humanhelp/unknown-action
-         (:error/type (domain/transition-error (req {}) :explode user-helper))))
+         (:error/type (model/transition-error (req {}) :explode user-helper))))
 
   (is (= :humanhelp/request-closed
          (:error/type
-          (domain/transition-error
+          (model/transition-error
            (req {:request/status :done})
            :claim
            user-helper))))
 
   (is (= :humanhelp/action-not-allowed
          (:error/type
-          (domain/transition-error
+          (model/transition-error
            (req {:request/status :open
                  :request/customer-user-id "user-owner"})
            :claim
@@ -604,7 +587,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest transition-claim-test
-  (let [result (domain/transition-request
+  (let [result (model/transition-request
                 (req {:request/status :open
                       :request/customer-user-id "user-owner"})
                 :claim
@@ -621,7 +604,7 @@
     (is (= :open (get-in result [:previous :request/status])))))
 
 (deftest transition-unclaim-test
-  (let [result (domain/transition-request
+  (let [result (model/transition-request
                 (req {:request/status :claimed
                       :request/claimed-by "user-helper"
                       :request/claimed-by-email "helper@example.com"})
@@ -637,7 +620,7 @@
     (is (= 5 (:request/updated-revision request')))))
 
 (deftest transition-take-over-test
-  (let [result (domain/transition-request
+  (let [result (model/transition-request
                 (req {:request/status :claimed
                       :request/claimed-by "user-helper"
                       :request/claimed-by-email "helper@example.com"})
@@ -657,19 +640,19 @@
         claimed-by-helper (req {:request/status :claimed
                                 :request/claimed-by "user-helper"})]
     (is (= :ok
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      owned-open
                      :done
                      user-owner
                      {:revision 7}))))
     (is (= :ok
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      claimed-by-helper
                      :done
                      user-helper
                      {:revision 8}))))
     (is (= :error
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      owned-open
                      :done
                      user-helper
@@ -681,19 +664,19 @@
         claimed-by-helper (req {:request/status :claimed
                                 :request/claimed-by "user-helper"})]
     (is (= :ok
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      owned-open
                      :cancel
                      user-owner
                      {:revision 7}))))
     (is (= :ok
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      claimed-by-helper
                      :cancel
                      user-helper
                      {:revision 8}))))
     (is (= :error
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      owned-open
                      :cancel
                      user-helper
@@ -701,7 +684,7 @@
 
 (deftest transition-rejection-test
   (is (= :error
-         (:status (domain/transition-request
+         (:status (model/transition-request
                    (req {:request/status :open
                          :request/customer-user-id "user-owner"})
                    :claim
@@ -709,7 +692,7 @@
                    {:revision 4}))))
 
   (is (= :error
-         (:status (domain/transition-request
+         (:status (model/transition-request
                    (req {:request/status :claimed
                          :request/claimed-by "user-helper"})
                    :unclaim
@@ -717,7 +700,7 @@
                    {:revision 4}))))
 
   (is (= :error
-         (:status (domain/transition-request
+         (:status (model/transition-request
                    (req {:request/status :claimed
                          :request/claimed-by "user-helper"})
                    :take-over
@@ -726,7 +709,7 @@
 
   (doseq [status [:done :cancelled]]
     (is (= :error
-           (:status (domain/transition-request
+           (:status (model/transition-request
                      (req {:request/status status})
                      :claim
                      user-helper
@@ -734,7 +717,7 @@
 
 (deftest transition-default-timestamp-and-revision-test
   (let [before (System/currentTimeMillis)
-        result (domain/transition-request
+        result (model/transition-request
                 (req {:request/status :open
                       :request/customer-user-id "user-owner"
                       :request/updated-revision 11})
@@ -754,35 +737,35 @@
   (is (= {:request/status :claimed
           :request/claimed-by "user-helper"
           :request/claimed-by-email "helper@example.com"}
-         (domain/claim-fields user-helper)))
+         (model/claim-fields user-helper)))
 
   (is (= {:request/status :open
           :request/claimed-by nil
           :request/claimed-by-email nil}
-         (domain/clear-claim-fields)))
+         (model/clear-claim-fields)))
 
   (is (= {:request/status :done}
-         (domain/terminal-fields :done))))
+         (model/terminal-fields :done))))
 
 (deftest action-label-test
-  (is (= "Claim" (domain/action-label :claim)))
-  (is (= "Unclaim" (domain/action-label :unclaim)))
-  (is (= "Take over" (domain/action-label :take-over)))
-  (is (= "Done" (domain/action-label :done)))
-  (is (= "Cancel" (domain/action-label :cancel)))
-  (is (= "Custom action" (domain/action-label :custom-action))))
+  (is (= "Claim" (model/action-label :claim)))
+  (is (= "Unclaim" (model/action-label :unclaim)))
+  (is (= "Take over" (model/action-label :take-over)))
+  (is (= "Done" (model/action-label :done)))
+  (is (= "Cancel" (model/action-label :cancel)))
+  (is (= "Custom action" (model/action-label :custom-action))))
 
 (deftest action-result-message-test
   (let [r (req {:request/number 42})]
     (is (= "Claimed request #42."
-           (domain/action-result-message :claim r)))
+           (model/action-result-message :claim r)))
     (is (= "Unclaimed request #42."
-           (domain/action-result-message :unclaim r)))
+           (model/action-result-message :unclaim r)))
     (is (= "Took over request #42."
-           (domain/action-result-message :take-over r)))
+           (model/action-result-message :take-over r)))
     (is (= "Marked request #42 done."
-           (domain/action-result-message :done r)))
+           (model/action-result-message :done r)))
     (is (= "Cancelled request #42."
-           (domain/action-result-message :cancel r)))
+           (model/action-result-message :cancel r)))
     (is (= "Updated request #42."
-           (domain/action-result-message :whatever r)))))
+           (model/action-result-message :whatever r)))))

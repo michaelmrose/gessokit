@@ -3,7 +3,7 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [gessokit.humanhelp.app :as app]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.live :as hh-live]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.store :as store]
@@ -229,7 +229,7 @@
         (is (= ::live-system live-system))
         (is (= :request/created (:topic change)))
         (is (= (:request/id created) (:request/id change)))
-        (is (= domain/store-id (:store/id change)))
+        (is (= model/store-id (:store/id change)))
         (is (= "owner" (:actor/id change)))
         (is (= "owner@example.com" (:actor/email change)))
         (is (= ctx (ctx-with-params
@@ -380,7 +380,7 @@
       (is (body-contains? response views/request-list-dom-id))
       (is (body-contains? response (:request/title request)))
       (is (or (body-contains? response (:request/details request))
-              (not (domain/present? (:request/details request))))))))
+              (not (model/present? (:request/details request))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle flows

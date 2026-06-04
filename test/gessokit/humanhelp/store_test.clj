@@ -1,7 +1,7 @@
 (ns gessokit.humanhelp.store-test
   (:require
    [clojure.test :refer [deftest is testing use-fixtures]]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.store :as store]))
 
 ;; -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@
    (every? #(contains? request %) required-request-keys)
    (string? (:request/id request))
    (pos-int? (:request/number request))
-   (= domain/store-id (:request/store-id request))
+   (= model/store-id (:request/store-id request))
    (string? (:request/title request))
    (string? (:request/area request))
    (contains? valid-statuses (:request/status request))
@@ -286,7 +286,7 @@
 
       (is (request-shape-valid? request))
       (is (= :open (:request/status request)))
-      (is (= domain/store-id (:request/store-id request)))
+      (is (= model/store-id (:request/store-id request)))
       (is (= "Need help finding gloves" (:request/title request)))
       (is (= "Hardware" (:request/area request)))
       (is (= "Large work gloves" (:request/details request)))

@@ -4,7 +4,7 @@
    [clojure.test :refer [deftest is testing]]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.domain :as domain]
+   [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
    [gessokit.ui :as ui]))
@@ -38,7 +38,7 @@
   (merge
    {:request/id "hh-req-1"
     :request/number 1
-    :request/store-id domain/store-id
+    :request/store-id model/store-id
     :request/title "Need help finding a rake"
     :request/area "Garden"
     :request/details "Looking for a sturdy rake for leaves."
@@ -47,8 +47,8 @@
     :request/status :open
     :request/claimed-by nil
     :request/claimed-by-email nil
-    :request/created-at-ms (domain/now-ms)
-    :request/updated-at-ms (domain/now-ms)
+    :request/created-at-ms (model/now-ms)
+    :request/updated-at-ms (model/now-ms)
     :request/created-revision 1
     :request/updated-revision 1}
    overrides))
@@ -334,7 +334,7 @@
             expected-url (routes/action-url (:request/id open-request)
                                             action)]
         (is (= expected-url (:hx-post (attrs node))))
-        (is (contains-text? node (domain/action-label action)))))))
+        (is (contains-text? node (model/action-label action)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; App bar
