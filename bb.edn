@@ -7,9 +7,15 @@
  {
   to-template
   {:doc "Regenerate the deps-new template project from this repo."
-   :task (do
-           (shell "rm -rf ../gesso-template-deps-new")
-           (shell "bb to-template.clj gesso-template-deps-new gesso-template local/gesso-template-deps-new"))}
+   :task
+   (let [template-dir "gesso-template-deps-new"
+         source-primary-ns "gessokit"
+         template-name "local/gesso-template-deps-new"]
+     (shell "rm" "-rf" (str "../" template-dir))
+     (shell "bb" "to-template.clj"
+            template-dir
+            source-primary-ns
+            template-name))}
   new
   {:doc "Create a project from the sibling gesso-template-deps-new template. Usage: bb new TARGET-DIR PRIMARY-NS"
    :task
