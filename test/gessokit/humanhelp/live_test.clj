@@ -3,18 +3,53 @@
    [clojure.test :refer [deftest is testing use-fixtures]]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.model :as model]
-   [gessokit.humanhelp.live :as hh-live]
-   [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.data :as data]
-   [gessokit.humanhelp.views :as views]))
+   [gessokit.humanhelp.live :as hh-live]
+   [gessokit.humanhelp.model :as model]
+   [gessokit.humanhelp.routes :as routes]
+   [gessokit.humanhelp.views :as views]
+   [xtdb.node :as xtn]))
+
+;; -----------------------------------------------------------------------------
+;; XTDB fixture
+;; -----------------------------------------------------------------------------
+
+(defonce !ctx
+  (atom nil))
+
+(defn ctx
+  []
+  (or @!ctx
+      (throw
+       (ex-info "live-test ctx has not been initialized."
+                {}))))
+
+(defn xtdb-fixture
+  [f]
+  (with-open [node (xtn/start-node)]
+    (reset! !ctx {:anti-forgery-token "test-token"
+                  :biff/node node
+                  :biff/conn node
+                  :xtdb/node node})
+    (try
+      (f)
+      (finally
+        (reset! !ctx nil)))))
+
+(defn reset-data-fixture
+  [f]
+  (data/reset-demo-state! (ctx))
+  (try
+    (f)
+    (finally
+      (data/reset-demo-state! (ctx)))))
+
+(use-fixtures :once xtdb-fixture)
+(use-fixtures :each reset-data-fixture)
 
 ;; -----------------------------------------------------------------------------
 ;; Fixtures
 ;; -----------------------------------------------------------------------------
-
-(def ctx
-  {:anti-forgery-token "test-token"})
 
 (def user-owner
   {:user/id "user-owner"
@@ -29,15 +64,18 @@
    :selected-request-id nil
    :visible-revision 3})
 
-(defn reset-store-fixture
-  [f]
-  (data/reset-demo-state!)
-  (try
-    (f)
-    (finally
-      (data/reset-demo-state!))))
+(defn latest-view-state
+  []
+  {:search ""
+   :selected-request-id nil
+   :visible-revision (data/latest-revision (ctx))})
 
-(use-fixtures :each reset-store-fixture)
+(defn render-options
+  [overrides]
+  (merge
+   {:user user-owner
+    :view-state (latest-view-state)}
+   overrides))
 
 (defn valid-input
   [overrides]
@@ -69,7 +107,7 @@
    overrides))
 
 ;; -----------------------------------------------------------------------------
-;; Hiccup helpers
+;; Hiccup / response helpers
 ;; -----------------------------------------------------------------------------
 
 (defn hiccup-branch?
@@ -113,14 +151,42 @@
     (re-pattern (java.util.regex.Pattern/quote text))
     (all-text tree))))
 
+(defn response-body
+  [response]
+  (:body response))
+
+(defn body-contains?
+  [response text]
+  (boolean
+   (re-find
+    (re-pattern (java.util.regex.Pattern/quote text))
+    (or (response-body response) ""))))
+
+(defn html-response?
+  [response]
+  (and (= 200 (:status response))
+       (= "text/html; charset=utf-8"
+          (get-in response [:headers "content-type"]))
+       (string? (:body response))))
+
+(defn scope-key
+  [scope]
+  [(:topic scope) (:id scope)])
+
+(defn scope-keys
+  [scopes]
+  (mapv scope-key scopes))
+
 ;; -----------------------------------------------------------------------------
 ;; Ctx/render-option assertions
 ;; -----------------------------------------------------------------------------
 
 (defn assert-render-ctx
   [actual-ctx expected-render-options]
-  (is (= (:anti-forgery-token ctx)
+  (is (= (:anti-forgery-token (ctx))
          (:anti-forgery-token actual-ctx)))
+  (is (= (:biff/node (ctx))
+         (:biff/node actual-ctx)))
   (is (= expected-render-options
          (#'hh-live/render-options actual-ctx))))
 
@@ -136,14 +202,26 @@
     (is (= client-plumbing/app-scope hh-live/notification-scope))))
 
 (deftest compiled-live-and-rules-test
-  (testing "compiled-live is present"
-    (is hh-live/compiled-live))
+  (testing "compiled-live is present and marked compiled"
+    (is hh-live/compiled-live)
+    (is (true? (:compiled? hh-live/compiled-live))))
 
-  (testing "live-rules are exported and non-empty"
-    (is (seq hh-live/live-rules)))
+  (testing "live-rules are exported as stable data"
+    (is (seq hh-live/live-rules))
+    (is (coll? hh-live/live-rules)))
 
-  (testing "live-rules are stable data, not a function to call later"
-    (is (coll? hh-live/live-rules))))
+  (testing "live-rules contain the expected Human Help topics"
+    (let [topics (set (map :when-topic hh-live/live-rules))]
+      (doseq [topic [:request/created
+                     :request/claimed
+                     :request/unclaimed
+                     :request/taken-over
+                     :request/done
+                     :request/cancelled
+                     :clock/minute
+                     :humanhelp-demo/reset]]
+        (is (contains? topics topic)
+            (str "Missing live rule for " topic))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Scope authorization
@@ -151,11 +229,32 @@
 
 (deftest allow-demo-store-test
   (testing "the demo store is authorized"
-    (is (true? (hh-live/allow-demo-store? ctx model/store-id))))
+    (is (true? (hh-live/allow-demo-store? (ctx) model/store-id))))
 
   (testing "any other store id is rejected"
-    (is (false? (hh-live/allow-demo-store? ctx "other-store")))
-    (is (false? (hh-live/allow-demo-store? ctx nil)))))
+    (is (false? (hh-live/allow-demo-store? (ctx) "other-store")))
+    (is (false? (hh-live/allow-demo-store? (ctx) nil)))))
+
+(deftest compiled-scope-test
+  (testing "request toolbar scope uses the Human Help toolbar topic"
+    (is (= {:topic :humanhelp/request-toolbar
+            :id model/store-id
+            :gesso.live/scope :request-toolbar
+            :gesso.live/scope-label "Request toolbar"}
+           (live/live-scope
+            hh-live/compiled-live
+            :request-toolbar
+            model/store-id))))
+
+  (testing "request list scope uses the Human Help list topic"
+    (is (= {:topic :humanhelp/request-list
+            :id model/store-id
+            :gesso.live/scope :request-list
+            :gesso.live/scope-label "Request list"}
+           (live/live-scope
+            hh-live/compiled-live
+            :request-list
+            model/store-id)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Query functions
@@ -163,63 +262,92 @@
 
 (deftest request-toolbar-query-test
   (testing "query merges toolbar data with ctx, store id, and render user"
-    (let [render-options {:user user-owner
-                          :view-state {:search ""
-                                       :visible-revision (data/latest-revision)}}
-          render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-toolbar-query render-ctx model/store-id)]
-      (assert-render-ctx (:ctx data) render-options)
-      (is (= model/store-id (:data/id data)))
-      (is (= user-owner (:user data)))
-      (is (= (data/latest-revision) (:latest-revision data)))
-      (is (= (data/open-request-count) (:open-count data)))
-      (is (contains? data :pending-open-count))
-      (is (contains? data :stale?))))
+    (let [opts {:user user-owner
+                :view-state {:search ""
+                             :visible-revision (data/latest-revision (ctx))}}
+          render-ctx (#'hh-live/with-render-options (ctx) opts)
+          result (hh-live/request-toolbar-query render-ctx model/store-id)]
+      (assert-render-ctx (:ctx result) opts)
+      (is (= model/store-id (:store/id result)))
+      (is (= user-owner (:user result)))
+      (is (= (data/latest-revision (ctx)) (:latest-revision result)))
+      (is (= (data/open-request-count (ctx)) (:open-count result)))
+      (is (contains? result :pending-open-count))
+      (is (contains? result :stale?))
+      (is (map? (:view-state result)))))
 
   (testing "query respects visible revision supplied in render options"
-    (let [visible-before (data/latest-revision)]
+    (let [visible-before (data/latest-revision (ctx))]
       (data/create-request!
+       (ctx)
        {:user user-owner
         :input (valid-input {:title "New pending request"})})
-      (let [render-options {:user user-owner
-                            :view-state {:search ""
-                                         :visible-revision visible-before}}
-            render-ctx (#'hh-live/with-render-options ctx render-options)
-            data (hh-live/request-toolbar-query render-ctx model/store-id)]
-        (assert-render-ctx (:ctx data) render-options)
-        (is (true? (:stale? data)))
-        (is (= 1 (:pending-open-count data)))))))
+      (let [opts {:user user-owner
+                  :view-state {:search ""
+                               :visible-revision visible-before}}
+            render-ctx (#'hh-live/with-render-options (ctx) opts)
+            result (hh-live/request-toolbar-query render-ctx model/store-id)]
+        (assert-render-ctx (:ctx result) opts)
+        (is (true? (:stale? result)))
+        (is (= 1 (:pending-open-count result)))))))
 
 (deftest request-list-query-test
   (testing "query merges board data with ctx, store id, and render user"
-    (let [render-options {:user user-owner
-                          :view-state {:search ""
-                                       :visible-revision (data/latest-revision)}}
-          render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-list-query render-ctx model/store-id)]
-      (assert-render-ctx (:ctx data) render-options)
-      (is (= model/store-id (:data/id data)))
-      (is (= user-owner (:user data)))
-      (is (= (data/latest-revision) (:latest-revision data)))
-      (is (vector? (:requests data)))
-      (is (map? (:view-state data)))))
+    (let [opts {:user user-owner
+                :view-state {:search ""
+                             :visible-revision (data/latest-revision (ctx))}}
+          render-ctx (#'hh-live/with-render-options (ctx) opts)
+          result (hh-live/request-list-query render-ctx model/store-id)]
+      (assert-render-ctx (:ctx result) opts)
+      (is (= model/store-id (:store/id result)))
+      (is (= user-owner (:user result)))
+      (is (= (data/latest-revision (ctx)) (:latest-revision result)))
+      (is (vector? (:requests result)))
+      (is (map? (:view-state result)))))
 
   (testing "query respects search"
     (data/create-request!
+     (ctx)
      {:user user-owner
       :input (valid-input
               {:title "Need a purple snow shovel"
                :area "Seasonal"
                :details "Front doors"
                :customer-name "Mina"})})
-    (let [render-options {:user user-owner
-                          :view-state {:search "purple mina seasonal"
-                                       :visible-revision (data/latest-revision)}}
-          render-ctx (#'hh-live/with-render-options ctx render-options)
-          data (hh-live/request-list-query render-ctx model/store-id)]
-      (assert-render-ctx (:ctx data) render-options)
+    (let [opts {:user user-owner
+                :view-state {:search "purple mina seasonal"
+                             :visible-revision (data/latest-revision (ctx))}}
+          render-ctx (#'hh-live/with-render-options (ctx) opts)
+          result (hh-live/request-list-query render-ctx model/store-id)]
+      (assert-render-ctx (:ctx result) opts)
       (is (some #(= "Need a purple snow shovel" (:request/title %))
-                (:requests data))))))
+                (:requests result))))))
+
+(deftest request-list-query-visible-revision-test
+  (testing "query preserves stale-list semantics for newly-created requests"
+    (let [visible-before (data/latest-revision (ctx))
+          {:keys [request revision]} (data/create-request!
+                                      (ctx)
+                                      {:user user-owner
+                                       :input (valid-input
+                                               {:title "Hidden from stale query"})})
+          stale-opts {:user user-owner
+                      :view-state {:search ""
+                                   :visible-revision visible-before}}
+          fresh-opts {:user user-owner
+                      :view-state {:search ""
+                                   :visible-revision revision}}
+          stale-result (hh-live/request-list-query
+                        (#'hh-live/with-render-options (ctx) stale-opts)
+                        model/store-id)
+          fresh-result (hh-live/request-list-query
+                        (#'hh-live/with-render-options (ctx) fresh-opts)
+                        model/store-id)]
+      (is (true? (:stale? stale-result)))
+      (is (not (contains? (set (map :request/id (:requests stale-result)))
+                          (:request/id request))))
+      (is (contains? (set (map :request/id (:requests fresh-result)))
+                     (:request/id request))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Render functions
@@ -227,15 +355,16 @@
 
 (deftest request-toolbar-render-test
   (testing "render returns toolbar root"
-    (let [node (hh-live/request-toolbar-render
-                {:ctx ctx
+    (let [latest (data/latest-revision (ctx))
+          node (hh-live/request-toolbar-render
+                {:ctx (ctx)
                  :user user-owner
                  :view-state {:search ""
-                              :visible-revision (data/latest-revision)}
+                              :visible-revision latest}
                  :open-count 2
                  :pending-open-count 0
                  :stale? false
-                 :latest-revision (data/latest-revision)})]
+                 :latest-revision latest})]
       (is (= views/request-toolbar-dom-id (:id (attrs node))))
       (is (= "request-toolbar"
              (:data-humanhelp-fragment (attrs node))))
@@ -243,13 +372,14 @@
 
 (deftest request-list-render-test
   (testing "render returns request list root"
-    (let [node (hh-live/request-list-render
-                {:ctx ctx
+    (let [latest (data/latest-revision (ctx))
+          node (hh-live/request-list-render
+                {:ctx (ctx)
                  :user user-owner
                  :view-state {:search ""
-                              :visible-revision (data/latest-revision)}
-                 :requests (data/all-requests)
-                 :latest-revision (data/latest-revision)})]
+                              :visible-revision latest}
+                 :requests (data/all-requests (ctx))
+                 :latest-revision latest})]
       (is (= views/request-list-dom-id (:id (attrs node))))
       (is (= "request-list"
              (:data-humanhelp-fragment (attrs node)))))))
@@ -340,30 +470,30 @@
 (deftest render-fragment-node-helper-test
   (testing "render-fragment-node delegates to live/render-fragment-node"
     (let [calls (atom [])
-          render-options {:user user-owner
-                          :view-state view-state}]
+          opts {:user user-owner
+                :view-state view-state}]
       (with-redefs [live/render-fragment-node
                     (fn [& args]
                       (swap! calls conj args)
                       [:rendered-fragment])]
         (is (= [:rendered-fragment]
                (hh-live/render-fragment-node
-                ctx
+                (ctx)
                 :request-toolbar
-                render-options)))
+                opts)))
         (is (= 1 (count @calls)))
         (let [[compiled ctx' fragment-name id] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-toolbar fragment-name))
           (is (= model/store-id id))
-          (is (= render-options (#'hh-live/render-options ctx')))
-          (is (= ctx (dissoc ctx' ::hh-live/render-options))))))))
+          (is (= opts (#'hh-live/render-options ctx')))
+          (is (= (ctx) (dissoc ctx' ::hh-live/render-options))))))))
 
 (deftest render-fragment-response-helper-test
   (testing "render-fragment-response delegates to live/render-fragment-response"
     (let [calls (atom [])
-          render-options {:user user-owner
-                          :view-state view-state}]
+          opts {:user user-owner
+                :view-state view-state}]
       (with-redefs [live/render-fragment-response
                     (fn [& args]
                       (swap! calls conj args)
@@ -372,21 +502,21 @@
         (is (= {:status 200
                 :body "ok"}
                (hh-live/render-fragment-response
-                ctx
+                (ctx)
                 :request-list
-                render-options)))
+                opts)))
         (is (= 1 (count @calls)))
         (let [[compiled ctx' fragment-name id] (first @calls)]
           (is (= hh-live/compiled-live compiled))
           (is (= :request-list fragment-name))
           (is (= model/store-id id))
-          (is (= render-options (#'hh-live/render-options ctx'))))))))
+          (is (= opts (#'hh-live/render-options ctx'))))))))
 
 (deftest stream-response-helper-test
   (testing "stream-response delegates to live/start-fragment-stream! and returns :response"
     (let [calls (atom [])
-          render-options {:user user-owner
-                          :view-state view-state}
+          opts {:user user-owner
+                :view-state view-state}
           live-system ::live-system]
       (with-redefs [live/start-fragment-stream!
                     (fn [& args]
@@ -400,16 +530,16 @@
                 :body ::stream-body}
                (hh-live/stream-response
                 live-system
-                ctx
+                (ctx)
                 :request-toolbar
-                render-options)))
+                opts)))
         (is (= 1 (count @calls)))
         (let [[live-system' compiled ctx' fragment-name id options] (first @calls)]
           (is (= live-system live-system'))
           (is (= hh-live/compiled-live compiled))
           (is (= :request-toolbar fragment-name))
           (is (= model/store-id id))
-          (is (= render-options (#'hh-live/render-options ctx')))
+          (is (= opts (#'hh-live/render-options ctx')))
           (is (= {:flow-options {:relieve? true}}
                  options))))))
 
@@ -421,7 +551,7 @@
                       {:response {:status 200}})]
         (hh-live/stream-response
          ::live-system
-         ctx
+         (ctx)
          :request-list
          {:user user-owner
           :view-state view-state}
@@ -433,6 +563,61 @@
                                   :extra true}
                   :custom true}
                  options)))))))
+
+;; -----------------------------------------------------------------------------
+;; Invalidation graph expansion
+;; -----------------------------------------------------------------------------
+
+(deftest request-created-expansion-test
+  (testing "created requests wake the toolbar only"
+    (let [r (request {:request/id "hh-req-4"
+                      :request/number 4
+                      :request/status :open})
+          change (hh-live/request-created-change
+                  {:request r
+                   :revision 4
+                   :actor user-owner})
+          scopes (live/expand-change hh-live/compiled-live (ctx) change)]
+      (is (= [[:humanhelp/request-toolbar model/store-id]]
+             (scope-keys scopes))))))
+
+(deftest request-transition-expansion-test
+  (testing "lifecycle transitions wake toolbar and list"
+    (let [current (request {:request/id "hh-req-4"
+                            :request/number 4
+                            :request/status :claimed})
+          previous (request {:request/id "hh-req-4"
+                             :request/number 4
+                             :request/status :open})
+          change (hh-live/request-transition-change
+                  {:action :claim
+                   :request current
+                   :previous previous
+                   :revision 5
+                   :actor user-helper})
+          scopes (live/expand-change hh-live/compiled-live (ctx) change)]
+      (is (= [[:humanhelp/request-toolbar model/store-id]
+              [:humanhelp/request-list model/store-id]]
+             (scope-keys scopes))))))
+
+(deftest minute-tick-expansion-test
+  (testing "minute ticks wake request-list only"
+    (let [scopes (live/expand-change
+                  hh-live/compiled-live
+                  (ctx)
+                  (hh-live/minute-tick-change))]
+      (is (= [[:humanhelp/request-list model/store-id]]
+             (scope-keys scopes))))))
+
+(deftest demo-reset-expansion-test
+  (testing "demo reset wakes toolbar and list"
+    (let [change (hh-live/demo-reset-change
+                  {:revision 3
+                   :actor user-owner})
+          scopes (live/expand-change hh-live/compiled-live (ctx) change)]
+      (is (= [[:humanhelp/request-toolbar model/store-id]
+              [:humanhelp/request-list model/store-id]]
+             (scope-keys scopes))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Change constructors
@@ -447,7 +632,8 @@
                  :revision 4
                  :actor user-owner})]
     (is (= :request/created (:topic change)))
-    (is (= model/store-id (:data/id change)))
+    (is (= model/store-id (:id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :open (:request/status change)))
@@ -486,7 +672,8 @@
                  :revision 5
                  :actor user-helper})]
     (is (= :request/claimed (:topic change)))
-    (is (= model/store-id (:data/id change)))
+    (is (= model/store-id (:id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= "hh-req-4" (:request/id change)))
     (is (= 4 (:request/number change)))
     (is (= :claimed (:request/status change)))
@@ -501,7 +688,8 @@
         change (hh-live/minute-tick-change)
         after (System/currentTimeMillis)]
     (is (= :clock/minute (:topic change)))
-    (is (= model/store-id (:data/id change)))
+    (is (= model/store-id (:id change)))
+    (is (= model/store-id (:store/id change)))
     (is (integer? (:at-ms change)))
     (is (<= before (:at-ms change) after))))
 
@@ -510,7 +698,8 @@
                 {:revision 9
                  :actor user-owner})]
     (is (= :humanhelp-demo/reset (:topic change)))
-    (is (= model/store-id (:data/id change)))
+    (is (= model/store-id (:id change)))
+    (is (= model/store-id (:store/id change)))
     (is (= 9 (:revision change)))
     (is (= "user-owner" (:actor/id change)))
     (is (= "owner@example.com" (:actor/email change)))))
@@ -547,24 +736,65 @@
              :request/title ""})))))
 
 (deftest send-new-request-toast-test
-  (let [calls (atom [])]
-    (with-redefs [client-plumbing/send-toast-to-scope!
-                  (fn [scope toast]
-                    (swap! calls conj {:scope scope
-                                       :toast toast})
-                    {:sent 1
-                     :toast toast})]
-      (let [result (hh-live/send-new-request-toast!
-                    {:request/customer-name "Jon"
-                     :request/number 4
-                     :request/title "Need a rake"})]
-        (is (= 1 (:sent result)))
-        (is (= 1 (count @calls)))
-        (is (= hh-live/notification-scope (:scope (first @calls))))
-        (is (= {:variant :info
-                :title "New request received"
-                :description "Jon added request #4: Need a rake"}
-               (:toast (first @calls))))))))
+  (testing "without actor, toast is sent to the whole notification scope"
+    (let [scope-calls (atom [])
+          except-calls (atom [])]
+      (with-redefs [client-plumbing/send-toast-to-scope!
+                    (fn [scope toast]
+                      (swap! scope-calls conj {:scope scope
+                                               :toast toast})
+                      {:sent 1
+                       :toast toast})
+
+                    client-plumbing/send-toast-to-scope-except-user!
+                    (fn [& args]
+                      (swap! except-calls conj args)
+                      {:sent 0})]
+        (let [result (hh-live/send-new-request-toast!
+                      {:request/customer-name "Jon"
+                       :request/number 4
+                       :request/title "Need a rake"})]
+          (is (= 1 (:sent result)))
+          (is (= 1 (count @scope-calls)))
+          (is (empty? @except-calls))
+          (is (= hh-live/notification-scope
+                 (:scope (first @scope-calls))))
+          (is (= {:variant :info
+                  :title "New request received"
+                  :description "Jon added request #4: Need a rake"}
+                 (:toast (first @scope-calls))))))))
+
+  (testing "with actor, toast excludes that user's connected clients"
+    (let [scope-calls (atom [])
+          except-calls (atom [])]
+      (with-redefs [client-plumbing/send-toast-to-scope!
+                    (fn [& args]
+                      (swap! scope-calls conj args)
+                      {:sent 0})
+
+                    client-plumbing/send-toast-to-scope-except-user!
+                    (fn [scope excluded-user-id toast]
+                      (swap! except-calls conj {:scope scope
+                                                :excluded-user-id excluded-user-id
+                                                :toast toast})
+                      {:sent 1
+                       :toast toast})]
+        (let [result (hh-live/send-new-request-toast!
+                      {:request/customer-name "Jon"
+                       :request/number 4
+                       :request/title "Need a rake"}
+                      {:actor user-owner})]
+          (is (= 1 (:sent result)))
+          (is (empty? @scope-calls))
+          (is (= 1 (count @except-calls)))
+          (is (= hh-live/notification-scope
+                 (:scope (first @except-calls))))
+          (is (= "user-owner"
+                 (:excluded-user-id (first @except-calls))))
+          (is (= {:variant :info
+                  :title "New request received"
+                  :description "Jon added request #4: Need a rake"}
+                 (:toast (first @except-calls)))))))))
 
 (deftest send-reset-toast-test
   (let [calls (atom [])]
@@ -593,6 +823,8 @@
                       {:sent 1
                        :toast toast})]
         (hh-live/send-request-action-error-toast! "Nope.")
+        (is (= hh-live/notification-scope
+               (:scope (first @calls))))
         (is (= {:variant :danger
                 :title "Request not updated"
                 :description "Nope."}
@@ -619,14 +851,15 @@
     (let [calls (atom [])
           live-system ::live-system
           change {:topic :request/created
-                  :data/id model/store-id}]
+                  :id model/store-id
+                  :store/id model/store-id}]
       (with-redefs [live/submit-expanded!
                     (fn [& args]
                       (swap! calls conj args)
                       {:submitted true})]
         (is (= {:submitted true}
-               (hh-live/notify! live-system ctx change)))
-        (is (= [[live-system ctx change]]
+               (hh-live/notify! live-system (ctx) change)))
+        (is (= [[live-system (ctx) change]]
                @calls))))))
 
 ;; -----------------------------------------------------------------------------
@@ -636,21 +869,21 @@
 (deftest render-fragment-node-integration-test
   (testing "actual toolbar fragment render returns expected root"
     (let [node (hh-live/render-fragment-node
-                ctx
+                (ctx)
                 :request-toolbar
                 {:user user-owner
                  :view-state {:search ""
-                              :visible-revision (data/latest-revision)}})]
+                              :visible-revision (data/latest-revision (ctx))}})]
       (is (= views/request-toolbar-dom-id (:id (attrs node))))
       (is (contains-text? node "Requests"))))
 
   (testing "actual request list fragment render returns expected root"
     (let [node (hh-live/render-fragment-node
-                ctx
+                (ctx)
                 :request-list
                 {:user user-owner
                  :view-state {:search ""
-                              :visible-revision (data/latest-revision)}})]
+                              :visible-revision (data/latest-revision (ctx))}})]
       (is (= views/request-list-dom-id (:id (attrs node))))
       (is (or (contains-text? node "Need help")
               (contains-text? node "No requests"))))))
@@ -658,28 +891,63 @@
 (deftest render-fragment-response-integration-test
   (testing "actual toolbar response is an HTML Ring response"
     (let [response (hh-live/render-fragment-response
-                    ctx
+                    (ctx)
                     :request-toolbar
                     {:user user-owner
                      :view-state {:search ""
-                                  :visible-revision (data/latest-revision)}})]
-      (is (= 200 (:status response)))
-      (is (= "text/html; charset=utf-8"
-             (get-in response [:headers "content-type"])))
-      (is (string? (:body response)))
-      (is (re-find (re-pattern views/request-toolbar-dom-id)
-                   (:body response)))))
+                                  :visible-revision (data/latest-revision (ctx))}})]
+      (is (html-response? response))
+      (is (body-contains? response views/request-toolbar-dom-id))))
 
   (testing "actual list response is an HTML Ring response"
     (let [response (hh-live/render-fragment-response
-                    ctx
+                    (ctx)
                     :request-list
                     {:user user-owner
                      :view-state {:search ""
-                                  :visible-revision (data/latest-revision)}})]
-      (is (= 200 (:status response)))
-      (is (= "text/html; charset=utf-8"
-             (get-in response [:headers "content-type"])))
-      (is (string? (:body response)))
-      (is (re-find (re-pattern views/request-list-dom-id)
-                   (:body response))))))
+                                  :visible-revision (data/latest-revision (ctx))}})]
+      (is (html-response? response))
+      (is (body-contains? response views/request-list-dom-id)))))
+
+(deftest render-fragment-response-stale-toolbar-integration-test
+  (testing "toolbar fragment rendered through live layer reports stale new-request state"
+    (let [visible-before (data/latest-revision (ctx))]
+      (data/create-request!
+       (ctx)
+       {:user user-owner
+        :input (valid-input {:title "Live stale toolbar target"})})
+      (let [response (hh-live/render-fragment-response
+                      (ctx)
+                      :request-toolbar
+                      {:user user-helper
+                       :view-state {:search ""
+                                    :visible-revision visible-before}})]
+        (is (html-response? response))
+        (is (body-contains? response views/request-toolbar-dom-id))
+        (is (body-contains? response "+1 new"))
+        (is (body-contains? response "New request data is available"))))))
+
+(deftest render-fragment-response-stale-list-integration-test
+  (testing "list fragment rendered through live layer does not reveal new requests behind old visible revision"
+    (let [visible-before (data/latest-revision (ctx))
+          {:keys [request revision]} (data/create-request!
+                                      (ctx)
+                                      {:user user-owner
+                                       :input (valid-input
+                                               {:title "Hidden live list target"})})
+          stale-response (hh-live/render-fragment-response
+                          (ctx)
+                          :request-list
+                          {:user user-helper
+                           :view-state {:search ""
+                                        :visible-revision visible-before}})
+          fresh-response (hh-live/render-fragment-response
+                          (ctx)
+                          :request-list
+                          {:user user-helper
+                           :view-state {:search ""
+                                        :visible-revision revision}})]
+      (is (html-response? stale-response))
+      (is (html-response? fresh-response))
+      (is (not (body-contains? stale-response (:request/title request))))
+      (is (body-contains? fresh-response (:request/title request))))))

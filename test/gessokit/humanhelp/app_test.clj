@@ -3,53 +3,85 @@
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
    [gessokit.humanhelp.app :as app]
-   [gessokit.humanhelp.model :as model]
-   [gessokit.humanhelp.live :as hh-live]
-   [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.data :as data]
+   [gessokit.humanhelp.live :as hh-live]
+   [gessokit.humanhelp.model :as model]
+   [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
-   [gessokit.middleware :as mid]))
+   [gessokit.middleware :as mid]
+   [xtdb.node :as xtn]))
 
 ;; -----------------------------------------------------------------------------
-;; Fixtures
+;; XTDB fixture
 ;; -----------------------------------------------------------------------------
 
-(def base-ctx
-  {:anti-forgery-token "test-token"
-   :gesso.live/system ::live-system
-   :user/id "owner"
-   :user/email "owner@example.com"
-   :session {:uid "owner"
-             :email "owner@example.com"}})
+(defonce !ctx-base
+  (atom nil))
 
-(def helper-ctx
-  (assoc base-ctx
+(defn ctx-base
+  []
+  (or @!ctx-base
+      (throw
+       (ex-info "app-test ctx has not been initialized."
+                {}))))
+
+(defn xtdb-fixture
+  [f]
+  (with-open [node (xtn/start-node)]
+    (reset! !ctx-base {:biff/node node
+                       :biff/conn node
+                       :xtdb/node node})
+    (try
+      (f)
+      (finally
+        (reset! !ctx-base nil)))))
+
+(defn base-ctx
+  []
+  (merge
+   (ctx-base)
+   {:anti-forgery-token "test-token"
+    :gesso.live/system ::live-system
+    :user/id "owner"
+    :user/email "owner@example.com"
+    :session {:uid "owner"
+              :email "owner@example.com"}}))
+
+(defn helper-ctx
+  []
+  (assoc (base-ctx)
          :user/id "helper"
          :user/email "helper@example.com"
          :session {:uid "helper"
                    :email "helper@example.com"}))
 
-(def other-ctx
-  (assoc base-ctx
+(defn other-ctx
+  []
+  (assoc (base-ctx)
          :user/id "other"
          :user/email "other@example.com"
          :session {:uid "other"
                    :email "other@example.com"}))
 
+(defn reset-data-fixture
+  [f]
+  (data/reset-demo-state! (base-ctx))
+  (try
+    (f)
+    (finally
+      (data/reset-demo-state! (base-ctx)))))
+
+(use-fixtures :once xtdb-fixture)
+(use-fixtures :each reset-data-fixture)
+
+;; -----------------------------------------------------------------------------
+;; Fixtures
+;; -----------------------------------------------------------------------------
+
 (def view-state
   {:search "garden"
    :selected-request-id "hh-req-1"
    :visible-revision 2})
-
-(defn reset-store-fixture
-  [f]
-  (data/reset-demo-state!)
-  (try
-    (f)
-    (finally
-      (data/reset-demo-state!))))
-
-(use-fixtures :each reset-store-fixture)
 
 ;; -----------------------------------------------------------------------------
 ;; Hiccup helpers
@@ -115,7 +147,8 @@
 
 (defn body-contains?
   [response text]
-  (str/includes? (or (:body response) "") text))
+  (boolean
+   (str/includes? (or (:body response) "") text)))
 
 (defn response-oob?
   [response dom-id]
@@ -164,11 +197,17 @@
   []
   (first
    (filter #(= :open (:request/status %))
-           (data/all-requests))))
+           (data/all-requests (base-ctx)))))
+
+(defn request-by-title
+  [title]
+  (first
+   (filter #(= title (:request/title %))
+           (data/all-requests (base-ctx)))))
 
 (defn owner-ctx-for
   [request]
-  (assoc base-ctx
+  (assoc (base-ctx)
          :user/id (:request/customer-user-id request)
          :user/email (str (:request/customer-user-id request)
                           "@example.com")
@@ -232,19 +271,23 @@
            {:path-params {:request-id "hh-req-3"}}}))))
 
 (deftest current-user-test
-  (is (= {:user/id "owner"
-          :user/email "owner@example.com"}
-         (app/current-user base-ctx)))
+  (testing "current-user prefers the signed-in ctx identity"
+    (is (= {:user/id "owner"
+            :user/email "owner@example.com"}
+           (app/current-user (base-ctx)))))
 
-  (is (= {:user/id "session-user"
-          :user/email "session@example.com"}
-         (app/current-user
-          {:session {:uid "session-user"
-                     :email "session@example.com"}}))))
+  (testing "current-user can use session-only identity"
+    (is (= {:user/id "session-user"
+            :user/email "session@example.com"}
+           (app/current-user
+            (merge
+             (ctx-base)
+             {:session {:uid "session-user"
+                        :email "session@example.com"}}))))))
 
 (deftest live-system-test
   (is (= ::live-system
-         (app/live-system base-ctx)))
+         (app/live-system (base-ctx))))
 
   (try
     (app/live-system {:a 1 :b 2})
@@ -303,6 +346,7 @@
              (:hx-target a)))
       (is (= "outerHTML" (:hx-swap a)))
       (is (str/includes? (:hx-trigger a) "sse:live-update"))
+      (is (str/includes? (:hx-trigger a) "htmx:sseOpen"))
       (is (not (str/includes? (:hx-get a) "?")))
       (is (= views/request-list-dom-id
              (:id (attrs inner))))))
@@ -322,10 +366,22 @@
              (:hx-include a)))
       (is (= (str "#" views/request-toolbar-dom-id)
              (:hx-target a)))
+      (is (= "outerHTML" (:hx-swap a)))
       (is (str/includes? (:hx-trigger a) "sse:live-update"))
+      (is (str/includes? (:hx-trigger a) "htmx:sseOpen"))
       (is (not (str/includes? (:hx-get a) "?")))
       (is (= views/request-toolbar-dom-id
              (:id (attrs inner)))))))
+
+(deftest live-panel-unknown-fragment-test
+  (testing "unknown live panel fragments throw useful ex-info"
+    (try
+      (app/live-panel :missing-fragment view-state)
+      (is false "Expected live-panel to throw")
+      (catch clojure.lang.ExceptionInfo e
+        (is (str/includes? (ex-message e)
+                           "Unknown Human Help fragment DOM id"))
+        (is (= :missing-fragment (:fragment (ex-data e))))))))
 
 (deftest page-panels-test
   (let [panels (app/page-panels view-state)]
@@ -335,17 +391,17 @@
                     views/request-list-dom-id))))
 
 (deftest page-data-test
-  (let [ctx (assoc base-ctx
+  (let [ctx (assoc (base-ctx)
                    :params {"q" "garden"
                             "selected" "hh-req-1"
                             "visible-revision" "2"})
-        data (app/page-data ctx)
-        state (:view-state data)
-        toolbar-panel (:request-toolbar-panel data)
-        list-panel (:request-list-panel data)]
+        page-data (app/page-data ctx)
+        state (:view-state page-data)
+        toolbar-panel (:request-toolbar-panel page-data)
+        list-panel (:request-list-panel page-data)]
     (is (= {:user/id "owner"
             :user/email "owner@example.com"}
-           (:user data)))
+           (:user page-data)))
     (is (= "garden" (:search state)))
     (is (= "hh-req-1" (:selected-request-id state)))
     (is (= 2 (:visible-revision state)))
@@ -364,12 +420,20 @@
     (is (= (str "#" views/board-state-form-id)
            (:hx-include (attrs list-panel))))))
 
+(deftest page-data-default-visible-revision-test
+  (testing "page-data normalizes missing visible revision to current latest"
+    (let [ctx (assoc (base-ctx) :params {})
+          page-data (app/page-data ctx)]
+      (is (= (data/latest-revision ctx)
+             (get-in page-data [:view-state :visible-revision]))))))
+
 ;; -----------------------------------------------------------------------------
 ;; Board-state OOB
 ;; -----------------------------------------------------------------------------
 
 (deftest board-state-form-oob-test
-  (let [node (app/board-state-form-oob view-state)
+  (let [ctx (base-ctx)
+        node (app/board-state-form-oob ctx view-state)
         a (attrs node)]
     (is (= :form (first node)))
     (is (= views/board-state-form-id (:id a)))
@@ -378,7 +442,9 @@
     (is (find-by-id node "humanhelp-search"))))
 
 (deftest with-board-state-oob-test
-  (let [node (app/with-board-state-oob
+  (let [ctx (base-ctx)
+        node (app/with-board-state-oob
+              ctx
               [:div {:id "payload"} "payload"]
               view-state)]
     (is (find-by-id node "payload"))
@@ -389,7 +455,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest fragment-render-options-test
-  (let [ctx (assoc base-ctx
+  (let [ctx (assoc (base-ctx)
                    :params {"q" "garden"
                             "selected" "hh-req-1"
                             "visible-revision" "3"})
@@ -403,20 +469,31 @@
            (:view-state opts)))))
 
 (deftest render-toolbar-node-test
-  (let [node (app/render-toolbar-node base-ctx view-state)]
+  (let [ctx (base-ctx)
+        node (app/render-toolbar-node
+              ctx
+              {:search ""
+               :visible-revision (data/latest-revision ctx)})]
     (is (= views/request-toolbar-dom-id
            (:id (attrs node))))
     (is (contains-text? node "Requests"))))
 
 (deftest render-list-node-test
-  (let [node (app/render-list-node base-ctx view-state)]
+  (let [ctx (base-ctx)
+        node (app/render-list-node
+              ctx
+              {:search ""
+               :visible-revision (data/latest-revision ctx)})]
     (is (= views/request-list-dom-id
            (:id (attrs node))))
     (is (or (contains-text? node "Need help finding a rake")
             (contains-text? node "No matching requests")))))
 
 (deftest board-oob-test
-  (let [result (app/board-oob base-ctx view-state)]
+  (let [ctx (base-ctx)
+        state {:search ""
+               :visible-revision (data/latest-revision ctx)}
+        result (app/board-oob ctx state)]
     (is (= views/request-toolbar-dom-id
            (:id (attrs (:toolbar result)))))
     (is (= views/request-list-dom-id
@@ -427,26 +504,51 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest app-page-test
-  (let [node (app/app-page base-ctx)]
+  (let [node (app/app-page (base-ctx))]
     (is (vector? node))
     (is (find-by-id node views/request-toolbar-dom-id))
     (is (find-by-id node views/request-list-dom-id))
     (is (contains-text? node "Human Help"))))
 
 (deftest request-toolbar-fragment-test
-  (let [response (app/request-toolbar-fragment base-ctx)]
+  (let [response (app/request-toolbar-fragment (base-ctx))]
     (is (html-response? response))
     (is (body-contains? response views/request-toolbar-dom-id))
     (is (body-contains? response "Requests"))))
 
 (deftest request-list-fragment-test
-  (let [response (app/request-list-fragment base-ctx)]
+  (let [response (app/request-list-fragment (base-ctx))]
     (is (html-response? response))
     (is (body-contains? response views/request-list-dom-id))
     (is (body-contains? response "Need help finding a rake"))))
 
+(deftest request-list-fragment-stale-visibility-test
+  (testing "fragment handler does not reveal newly-created requests behind old visible revision"
+    (let [ctx (base-ctx)
+          visible-before (data/latest-revision ctx)
+          {:keys [request revision]} (data/create-request!
+                                      ctx
+                                      {:user {:user/id "creator"
+                                              :user/email "creator@example.com"}
+                                       :input {:title "Hidden app fragment target"
+                                               :area "Garden"
+                                               :details nil
+                                               :customer-name "Creator"}})
+          stale-response (app/request-list-fragment
+                          (assoc ctx
+                                 :params {"q" ""
+                                          "visible-revision" (str visible-before)}))
+          fresh-response (app/request-list-fragment
+                          (assoc ctx
+                                 :params {"q" ""
+                                          "visible-revision" (str revision)}))]
+      (is (html-response? stale-response))
+      (is (html-response? fresh-response))
+      (is (not (body-contains? stale-response (:request/title request))))
+      (is (body-contains? fresh-response (:request/title request))))))
+
 (deftest create-request-dialog-fragment-test
-  (let [response (app/create-request-dialog-fragment base-ctx)]
+  (let [response (app/create-request-dialog-fragment (base-ctx))]
     (is (html-response? response))
     (is (body-contains? response views/create-request-dialog-id))
     (is (body-contains? response "Create request"))
@@ -463,14 +565,15 @@
                     (swap! calls conj args)
                     {:status 200
                      :body ::stream})]
-      (is (= {:status 200
-              :body ::stream}
-             (app/request-toolbar-stream base-ctx)))
-      (let [[live-system ctx fragment opts] (first @calls)]
-        (is (= ::live-system live-system))
-        (is (= base-ctx ctx))
-        (is (= :request-toolbar fragment))
-        (is (= (app/fragment-render-options base-ctx) opts))))))
+      (let [ctx (base-ctx)]
+        (is (= {:status 200
+                :body ::stream}
+               (app/request-toolbar-stream ctx)))
+        (let [[live-system ctx' fragment opts] (first @calls)]
+          (is (= ::live-system live-system))
+          (is (= ctx ctx'))
+          (is (= :request-toolbar fragment))
+          (is (= (app/fragment-render-options ctx) opts)))))))
 
 (deftest request-list-stream-test
   (let [calls (atom [])]
@@ -479,14 +582,15 @@
                     (swap! calls conj args)
                     {:status 200
                      :body ::stream})]
-      (is (= {:status 200
-              :body ::stream}
-             (app/request-list-stream base-ctx)))
-      (let [[live-system ctx fragment opts] (first @calls)]
-        (is (= ::live-system live-system))
-        (is (= base-ctx ctx))
-        (is (= :request-list fragment))
-        (is (= (app/fragment-render-options base-ctx) opts))))))
+      (let [ctx (base-ctx)]
+        (is (= {:status 200
+                :body ::stream}
+               (app/request-list-stream ctx)))
+        (let [[live-system ctx' fragment opts] (first @calls)]
+          (is (= ::live-system live-system))
+          (is (= ctx ctx'))
+          (is (= :request-list fragment))
+          (is (= (app/fragment-render-options ctx) opts)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request creation
@@ -496,122 +600,156 @@
   (let [notified (atom [])
         toasted (atom [])]
     (with-redefs [hh-live/notify! (recording-notify notified)
-                  hh-live/send-new-request-toast!
-                  (fn [request]
-                    (swap! toasted conj request)
+                  app/send-new-request-toast-safely!
+                  (fn [& args]
+                    (swap! toasted conj args)
                     {:sent 1})]
-      (let [response (app/create-request!
-                      (assoc base-ctx
-                             :params {"title" ""
-                                      "area" ""}))]
+      (let [ctx (assoc (base-ctx)
+                       :params {"title" ""
+                                "area" ""})
+            before-revision (data/latest-revision ctx)
+            response (app/create-request! ctx)]
         (is (html-response? response))
+        (is (= before-revision (data/latest-revision ctx)))
         (is (response-oob? response views/create-request-dialog-id))
         (is (body-contains? response "Create request"))
         (is (empty? @notified))
         (is (empty? @toasted))))))
 
 (deftest create-request-success-response-test
-  (let [request {:request/id "hh-req-4"
-                 :request/number 4}
+  (let [ctx (base-ctx)
+        before-revision (data/latest-revision ctx)
+        {:keys [request revision]} (data/create-request!
+                                    ctx
+                                    {:user (app/current-user ctx)
+                                     :input {:title "Need created response target"
+                                             :area "Garden"
+                                             :details nil
+                                             :customer-name "Avery"}})
         response (app/create-request-success-response
-                  base-ctx
+                  ctx
                   {:request request
-                   :revision 4
-                   :view-state view-state})]
+                   :revision revision
+                   :view-state {:search ""
+                                :visible-revision before-revision}})]
     (is (html-response? response))
     (is (response-oob? response views/request-toolbar-dom-id))
     (is (response-oob? response views/request-list-dom-id))
     (is (response-oob? response views/create-request-dialog-id))
     (is (response-oob? response views/board-state-form-id))
-    (is (body-contains? response "Request created"))))
+    (is (body-contains? response "Request created"))
+    (is (body-contains? response "Need created response target"))
+    (is (body-contains? response
+                        (str "name=\"visible-revision\" value=\""
+                             revision
+                             "\"")))))
 
 (deftest create-request-success-test
   (let [notified (atom [])
-        toasted (atom [])
-        before-revision (data/latest-revision)]
+        toasted (atom [])]
     (with-redefs [hh-live/notify! (recording-notify notified)
-                  hh-live/send-new-request-toast!
-                  (fn [request & [opts]]
+                  app/send-new-request-toast-safely!
+                  (fn [request user]
                     (swap! toasted conj {:request request
-                                         :opts opts})
+                                         :user user})
                     {:sent 1})]
-      (let [ctx (assoc base-ctx
+      (let [ctx (assoc (base-ctx)
                        :params (valid-create-params
                                 {"title" "Need gloves"
                                  "area" "Garden"
                                  "details" "Large gloves"
                                  "customer-name" "Avery"}))
+            before-revision (data/latest-revision ctx)
             response (app/create-request! ctx)]
         (is (html-response? response))
-        (is (= (inc before-revision) (data/latest-revision)))
+        (is (= (inc before-revision) (data/latest-revision ctx)))
         (is (= 1 (count @notified)))
         (is (= 1 (count @toasted)))
 
-        (let [{:keys [request opts]} (first @toasted)]
+        (let [{:keys [request user]} (first @toasted)]
           (is (= "Need gloves" (:request/title request)))
           (is (= "Garden" (:request/area request)))
           (is (= "Large gloves" (:request/details request)))
           (is (= "Avery" (:request/customer-name request)))
-          (is (= {:actor (app/current-user ctx)}
-                 opts)))
+          (is (= (app/current-user ctx) user)))
 
         (let [[live-system ctx' change] (first @notified)]
           (is (= ::live-system live-system))
           (is (= ctx ctx'))
           (is (= :request/created (:topic change)))
-          (is (= model/store-id (:data/id change))))
+          (is (= model/store-id (:id change)))
+          (is (= model/store-id (:store/id change)))
+          (is (= "owner" (:actor/id change)))
+          (is (= "owner@example.com" (:actor/email change))))
 
         (is (response-oob? response views/request-toolbar-dom-id))
         (is (response-oob? response views/request-list-dom-id))
         (is (response-oob? response views/create-request-dialog-id))
-        (is (response-oob? response views/board-state-form-id))))))
+        (is (response-oob? response views/board-state-form-id))
+        (is (body-contains? response "Need gloves"))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request list interactions
 ;; -----------------------------------------------------------------------------
 
 (deftest refresh-requests-test
-  (data/create-request!
-   {:user {:user/id "creator"
-           :user/email "creator@example.com"}
-    :input {:title "New hidden request"
-            :area "Garden"
-            :details nil
-            :customer-name "Creator"}})
+  (let [ctx (base-ctx)
+        old-visible (data/latest-revision ctx)]
+    (data/create-request!
+     ctx
+     {:user {:user/id "creator"
+             :user/email "creator@example.com"}
+      :input {:title "New hidden request"
+              :area "Garden"
+              :details nil
+              :customer-name "Creator"}})
 
-  (let [latest (data/latest-revision)
-        response (app/refresh-requests!
-                  (assoc base-ctx
-                         :params {"q" "garden"
-                                  "visible-revision" "3"}))]
-    (is (html-response? response))
-    (is (response-oob? response views/request-toolbar-dom-id))
-    (is (response-oob? response views/request-list-dom-id))
-    (is (response-oob? response views/board-state-form-id))
-    (is (body-contains? response (str "name=\"visible-revision\" value=\"" latest "\"")))))
+    (let [latest (data/latest-revision ctx)
+          response (app/refresh-requests!
+                    (assoc ctx
+                           :params {"q" "garden"
+                                    "visible-revision" (str old-visible)}))]
+      (is (html-response? response))
+      (is (response-oob? response views/request-toolbar-dom-id))
+      (is (response-oob? response views/request-list-dom-id))
+      (is (response-oob? response views/board-state-form-id))
+      (is (body-contains? response "New hidden request"))
+      (is (body-contains? response
+                          (str "name=\"visible-revision\" value=\""
+                               latest
+                               "\""))))))
 
 (deftest search-requests-test
-  (let [response (app/search-requests
-                  (assoc base-ctx
+  (let [ctx (base-ctx)
+        response (app/search-requests
+                  (assoc ctx
                          :params {"q" "rake"
-                                  "visible-revision" "3"}))]
+                                  "visible-revision"
+                                  (str (data/latest-revision ctx))}))]
     (is (html-response? response))
     (is (body-contains? response views/request-list-dom-id))
     (is (body-contains? response "Need help finding a rake"))
     (is (not (body-contains? response "Can someone help load soil?")))))
 
 (deftest search-requests-clear-test
-  (let [response (app/search-requests
-                  (assoc base-ctx
+  (let [ctx (base-ctx)
+        response (app/search-requests
+                  (assoc ctx
                          :params {"q" ""
-                                  "visible-revision" "3"}))]
+                                  "visible-revision"
+                                  (str (data/latest-revision ctx))}))]
     (is (html-response? response))
     (is (body-contains? response "Need help finding a rake"))
     (is (body-contains? response "Can someone help load soil?"))))
 
 (deftest select-request-test
-  (let [response (app/select-request
-                  (ctx-with-selected-request base-ctx "hh-req-1"))]
+  (let [ctx (base-ctx)
+        response (app/select-request
+                  (assoc
+                   (ctx-with-selected-request ctx "hh-req-1")
+                   :params {"selected" "old-selection"
+                            "visible-revision"
+                            (str (data/latest-revision ctx))}))]
     (is (html-response? response))
     (is (body-contains? response views/request-list-dom-id))
     (is (body-contains? response "Looking for a sturdy rake for bark and leaves."))
@@ -626,21 +764,24 @@
   (let [open-request (open-seed-request)
         notified (atom [])]
     (with-redefs [hh-live/notify! (recording-notify notified)]
-      (let [ctx (ctx-with-request-id helper-ctx (:request/id open-request))
-            response (app/lifecycle-action! ctx :claim data/claim-request!)]
+      (let [ctx (ctx-with-request-id
+                 (helper-ctx)
+                 (:request/id open-request))
+            response (app/lifecycle-action! ctx :claim data/claim-request!)
+            updated (data/request-by-id ctx (:request/id open-request))]
         (is (html-response? response))
-        (is (= :claimed
-               (:request/status
-                (data/request-by-id (:request/id open-request)))))
-        (is (= "helper"
-               (:request/claimed-by
-                (data/request-by-id (:request/id open-request)))))
+        (is (= :claimed (:request/status updated)))
+        (is (= "helper" (:request/claimed-by updated)))
         (is (= 1 (count @notified)))
 
         (let [[live-system ctx' change] (first @notified)]
           (is (= ::live-system live-system))
           (is (= ctx ctx'))
-          (is (= :request/claimed (:topic change))))
+          (is (= :request/claimed (:topic change)))
+          (is (= model/store-id (:id change)))
+          (is (= model/store-id (:store/id change)))
+          (is (= (:request/id open-request) (:request/id change)))
+          (is (= :claim (:action change))))
 
         (is (response-oob? response views/request-toolbar-dom-id))
         (is (response-oob? response views/request-list-dom-id))
@@ -649,51 +790,53 @@
 (deftest lifecycle-action-error-test
   (let [open-request (open-seed-request)
         notified (atom [])
-        ctx (owner-ctx-for open-request)]
+        owner-ctx (owner-ctx-for open-request)]
     (with-redefs [hh-live/notify! (recording-notify notified)]
-      (let [response (app/lifecycle-action!
-                      (ctx-with-request-id ctx (:request/id open-request))
+      (let [ctx (ctx-with-request-id owner-ctx (:request/id open-request))
+            response (app/lifecycle-action!
+                      ctx
                       :claim
                       data/claim-request!)]
         (is (html-response? response))
         (is (body-contains? response "Request not updated"))
         (is (empty? @notified))
         (is (= open-request
-               (data/request-by-id (:request/id open-request))))))))
+               (data/request-by-id ctx (:request/id open-request))))))))
 
 (defn delegated-action
   [handler]
   (with-redefs [app/lifecycle-action!
-                (fn [ctx action store-fn]
+                (fn [ctx action transition-fn]
                   {:ctx ctx
                    :action action
-                   :store-fn store-fn})]
-    (handler base-ctx)))
+                   :transition-fn transition-fn})]
+    (let [ctx (base-ctx)]
+      (handler ctx))))
 
 (deftest lifecycle-specific-handlers-test
-  (is (= {:ctx base-ctx
+  (is (= {:ctx (base-ctx)
           :action :claim
-          :store-fn data/claim-request!}
+          :transition-fn data/claim-request!}
          (delegated-action app/claim-request!)))
 
-  (is (= {:ctx base-ctx
+  (is (= {:ctx (base-ctx)
           :action :unclaim
-          :store-fn data/unclaim-request!}
+          :transition-fn data/unclaim-request!}
          (delegated-action app/unclaim-request!)))
 
-  (is (= {:ctx base-ctx
+  (is (= {:ctx (base-ctx)
           :action :take-over
-          :store-fn data/take-over-request!}
+          :transition-fn data/take-over-request!}
          (delegated-action app/take-over-request!)))
 
-  (is (= {:ctx base-ctx
+  (is (= {:ctx (base-ctx)
           :action :done
-          :store-fn data/mark-request-done!}
+          :transition-fn data/mark-request-done!}
          (delegated-action app/mark-request-done!)))
 
-  (is (= {:ctx base-ctx
+  (is (= {:ctx (base-ctx)
           :action :cancel
-          :store-fn data/cancel-request!}
+          :transition-fn data/cancel-request!}
          (delegated-action app/cancel-request!))))
 
 ;; -----------------------------------------------------------------------------
@@ -701,38 +844,43 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest reset-demo-test
-  (data/create-request!
-   {:user {:user/id "creator"
-           :user/email "creator@example.com"}
-    :input {:title "Temporary request"
-            :area "Garden"
-            :details nil
-            :customer-name "Creator"}})
+  (let [ctx (base-ctx)]
+    (data/create-request!
+     ctx
+     {:user {:user/id "creator"
+             :user/email "creator@example.com"}
+      :input {:title "Temporary request"
+              :area "Garden"
+              :details nil
+              :customer-name "Creator"}})
 
-  (is (> (data/latest-revision) 3))
+    (is (> (data/latest-revision ctx) 3))
 
-  (let [notified (atom [])
-        reset-toasts (atom 0)]
-    (with-redefs [hh-live/notify! (recording-notify notified)
-                  hh-live/send-reset-toast!
-                  (fn []
-                    (swap! reset-toasts inc)
-                    {:sent 1})]
-      (let [response (app/reset-demo! base-ctx)]
-        (is (html-response? response))
-        (is (= 3 (data/latest-revision)))
-        (is (= 1 (count @notified)))
-        (is (= 1 @reset-toasts))
+    (let [notified (atom [])
+          reset-toasts (atom 0)]
+      (with-redefs [hh-live/notify! (recording-notify notified)
+                    app/send-reset-toast-safely!
+                    (fn []
+                      (swap! reset-toasts inc)
+                      {:sent 1})]
+        (let [response (app/reset-demo! ctx)]
+          (is (html-response? response))
+          (is (= 3 (data/latest-revision ctx)))
+          (is (nil? (request-by-title "Temporary request")))
+          (is (= 1 (count @notified)))
+          (is (= 1 @reset-toasts))
 
-        (let [[live-system ctx change] (first @notified)]
-          (is (= ::live-system live-system))
-          (is (= base-ctx ctx))
-          (is (= :humanhelp-demo/reset (:topic change)))
-          (is (= 3 (:revision change))))
+          (let [[live-system ctx' change] (first @notified)]
+            (is (= ::live-system live-system))
+            (is (= ctx ctx'))
+            (is (= :humanhelp-demo/reset (:topic change)))
+            (is (= model/store-id (:id change)))
+            (is (= model/store-id (:store/id change)))
+            (is (= 3 (:revision change))))
 
-        (is (response-oob? response views/request-toolbar-dom-id))
-        (is (response-oob? response views/request-list-dom-id))
-        (is (response-oob? response views/board-state-form-id))))))
+          (is (response-oob? response views/request-toolbar-dom-id))
+          (is (response-oob? response views/request-list-dom-id))
+          (is (response-oob? response views/board-state-form-id)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Module
@@ -778,5 +926,13 @@
               route-tree))
     (is (some #(= [routes/request-list-fragment-route
                    {:get app/request-list-fragment}]
+                 %)
+              route-tree))
+    (is (some #(= [routes/request-toolbar-stream-route
+                   {:get app/request-toolbar-stream}]
+                 %)
+              route-tree))
+    (is (some #(= [routes/request-list-stream-route
+                   {:get app/request-list-stream}]
                  %)
               route-tree))))

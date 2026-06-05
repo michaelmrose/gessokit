@@ -810,6 +810,30 @@
                 view-state')}))
 
 (defn toolbar-data
+  "Return the data needed to render the request toolbar.
+
+   Toolbar staleness means there are newly-created open requests that are not
+   part of the viewer's current visible revision. Lifecycle-only changes such
+   as claim/unclaim/done/cancel should update visible cards in place, but should
+   not light the manual refresh affordance."
+  [ctx view-state]
+  (let [view-state'         (normalize-view-state ctx view-state)
+        requests            (all-requests ctx)
+        latest-revision'    (latest-revision ctx)
+        visible-revision    (:visible-revision view-state')
+        pending-open-count' (model/pending-open-request-count
+                             requests
+                             visible-revision)]
+    {:store/id model/store-id
+     :store/name model/store-name
+     :view-state view-state'
+     :latest-revision latest-revision'
+     :visible-revision visible-revision
+     :stale? (pos? pending-open-count')
+     :open-count (model/open-request-count requests)
+     :pending-open-count pending-open-count'}))
+
+#_(defn toolbar-data
   "Return the data needed to render the request toolbar."
   [ctx view-state]
   (let [view-state'      (normalize-view-state ctx view-state)
