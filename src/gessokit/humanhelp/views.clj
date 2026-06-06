@@ -11,9 +11,9 @@
 
    Data comes in from app/live/store boundary namespaces."
   (:require
-   [clojure.string :as str]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
+   [gessokit.humanhelp.components.request-card.core :as request-card]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.ui :as ui]))
@@ -46,26 +46,6 @@
   (or (:user/email user)
       (:user/id user)
       "demo-user"))
-
-(defn status-label
-  [request]
-  (model/request-status-label request))
-
-(defn status-pill-status
-  [request]
-  (case (:request/status request)
-    :open :waiting
-    :claimed :active
-    :done :success
-    :cancelled :muted
-    :destructive))
-
-(defn request-status-pill
-  [request]
-  (g/status-pill
-   {:status (status-pill-status request)
-    :text (status-label request)
-    :dot? true}))
 
 (defn muted
   [text]
@@ -122,42 +102,6 @@
    text])
 
 ;; -----------------------------------------------------------------------------
-;; Form/action helpers
-;; -----------------------------------------------------------------------------
-
-(defn form-action
-  [ctx {:keys [to text variant size view-state attrs]}]
-  [:form
-   (merge
-    {:method "post"
-     :hx-post to
-     :hx-swap "none"
-     :class "inline-flex"}
-    attrs)
-   (g/anti-forgery-input ctx)
-   (view-state-hidden-inputs view-state)
-   (g/button
-    {:variant (or variant :default)
-     :size (or size :sm)
-     :text text
-     :attrs {:type "submit"}})])
-
-(defn action-button
-  [ctx request user action view-state]
-  (form-action
-   ctx
-   {:to (routes/action-url (:request/id request) action)
-    :text (model/action-label action)
-    :variant (case action
-               :done :primary
-               :claim :primary
-               :take-over :primary
-               :cancel :outline
-               :unclaim :outline
-               :default)
-    :view-state view-state}))
-
-;; -----------------------------------------------------------------------------
 ;; App bar
 ;; -----------------------------------------------------------------------------
 
@@ -167,7 +111,6 @@
        :class "cluster-theme items-center"
        :style {:color "var(--foreground)"
                :text-decoration "none"}}
-   ;; (g/icon "hh" {:size :sm})
    [:img {:src "/img/hh.png"
           :alt ""
           :aria-hidden "true"
@@ -200,10 +143,10 @@
                 :style {:width "3rem"
                         :height "3rem"
                         :list-style "none"}}
-      (g/icon "circle-user-round" {:size :2xl
-                                   :title "Account"
-                                   :attrs {:stroke-width 1.5}
-                                   })]
+      (g/icon "circle-user-round"
+              {:size :2xl
+               :title "Account"
+               :attrs {:stroke-width 1.5}})]
 
      [:div {:class "absolute right-0 mt-2 min-w-56 radius-lg border-theme shadow-lg"
             :style {:background "var(--popover)"
@@ -221,33 +164,6 @@
                     :white-space "nowrap"}}
         email]]
       (logout-form)]]))
-
-#_(defn user-menu
-  [user]
-  [:details {:class "relative"}
-   [:summary {:class "inline-flex cursor-pointer list-none items-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
-              :style {:border-style "solid"
-                      :border-color "var(--border)"
-                      :background "var(--card)"
-                      :color "var(--card-foreground)"}}
-    [:span {:class "truncate max-w-[18rem]"}
-     (user-email user)]
-    (g/icon "chevron-down" {:size :sm})]
-
-   [:div {:class "absolute right-0 z-50 mt-2 min-w-56 radius-md border-theme pad-panel shadow-lg"
-          :style {:border-style "solid"
-                  :border-color "var(--border)"
-                  :background "var(--popover, var(--card))"
-                  :color "var(--popover-foreground, var(--card-foreground))"}}
-    [:div {:class "content-stack-theme"}
-     [:div {:class "font-body text-xs-theme leading-body"
-            :style {:color "var(--muted-foreground)"}}
-      "Signed in as"]
-     [:div {:class "font-body text-sm-theme leading-body weight-medium-theme break-all"}
-      (user-email user)]
-     [:div {:class "border-t border-theme"
-            :style {:border-color "var(--border)"}}]
-     (logout-form)]]])
 
 (defn app-bar
   [ctx user]
@@ -403,94 +319,8 @@
                              :padding-left "2.5rem")}]]]))
 
 ;; -----------------------------------------------------------------------------
-;; Request cards
+;; Request list
 ;; -----------------------------------------------------------------------------
-
-(defn card-selected?
-  [request view-state]
-  (= (:request/id request)
-     (:selected-request-id view-state)))
-
-(defn request-card-style
-  [selected?]
-  {:border-style "solid"
-   :border-color (if selected?
-                   "var(--primary)"
-                   "var(--border)")
-   :background "var(--background)"
-   :color "var(--foreground)"
-   :box-shadow (when selected?
-                 "0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent)")})
-
-(defn request-meta
-  [request]
-  [:div {:class "cluster-theme items-center"}
-   (request-status-pill request)
-
-   [:span {:class "font-body text-xs-theme"
-           :style {:color "var(--muted-foreground)"}}
-    (:request/area request)]
-
-   [:span {:class "font-body text-xs-theme"
-           :style {:color "var(--muted-foreground)"}}
-    "·"]
-
-   [:span {:class "font-body text-xs-theme"
-           :style {:color "var(--muted-foreground)"}}
-    "waiting "
-    (model/waiting-label request)]])
-
-(defn request-card-actions
-  [ctx request user view-state]
-  (let [actions (model/available-actions request user)]
-    (when (seq actions)
-      (into
-       [:div {:class "cluster-theme items-center justify-end"}]
-       (map #(action-button ctx request user % view-state))
-       actions))))
-
-(defn request-card
-  [ctx {:keys [request user view-state]}]
-  (let [selected? (card-selected? request view-state)]
-    [:article {:id (str "humanhelp-request-" (:request/id request))
-               :data-humanhelp-request-card true
-               :class "radius-xl border-theme pad-card content-stack-theme transition-all"
-               :style (request-card-style selected?)}
-     [:a {:href (if selected?
-                  (routes/clear-selection-url view-state)
-                  (routes/select-request-url (:request/id request) view-state))
-          :hx-get (if selected?
-                    (routes/clear-selection-url view-state)
-                    (routes/select-request-url (:request/id request) view-state))
-          :hx-target (str "#" request-list-dom-id)
-          :hx-swap "outerHTML"
-          :class "block content-stack-theme"
-          :style {:color "inherit"
-                  :text-decoration "none"}}
-      [:div {:class "cluster-theme items-start justify-between"}
-       [:div {:class "content-stack-theme gap-field"}
-        [:h3 {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"}
-         (:request/title request)]
-        (request-meta request)]
-       (g/icon (if selected? "chevron-up" "chevron-down")
-               {:size :sm})]
-
-      [:div {:class "cluster-theme items-center"}
-       [:span {:class "font-body text-sm-theme leading-body weight-medium-theme"}
-        (:request/customer-name request)]
-
-       (when-let [claimed-by (:request/claimed-by-email request)]
-         [:span {:class "font-body text-xs-theme leading-body"
-                 :style {:color "var(--muted-foreground)"}}
-          (str "claimed by " claimed-by)])]]
-
-     (when selected?
-       [:div {:class "content-stack-theme"}
-        (when (model/present? (:request/details request))
-          [:p {:class "font-body text-sm-theme leading-body"}
-           (:request/details request)])
-
-        (request-card-actions ctx request user view-state)])]))
 
 (defn empty-request-list
   [{:keys [view-state]}]
@@ -512,11 +342,12 @@
    (if (seq requests)
      [:div {:class "content-stack-theme"}
       (for [request requests]
-        (request-card
+        (request-card/request-card
          ctx
          {:request request
           :user user
-          :view-state view-state}))]
+          :view-state view-state
+          :request-list-dom-id request-list-dom-id}))]
      (empty-request-list {:view-state view-state}))])
 
 ;; -----------------------------------------------------------------------------

@@ -54,5 +54,6 @@
     :output-file "resources/public/gesso/app-themes.css"
     :component-css-dirs [(str gesso-path "/gesso/components")
                          "src/gessokit/components"
+                         "src/gessokit/humanhelp/components"
                          "src/gessokit/site/components"]}))
   }}
