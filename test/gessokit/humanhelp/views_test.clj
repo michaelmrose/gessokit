@@ -2,7 +2,6 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
@@ -23,10 +22,6 @@
 (def helper
   {:user/id "user-helper"
    :user/email "helper@example.com"})
-
-(def other-user
-  {:user/id "user-other"
-   :user/email "other@example.com"})
 
 (def view-state
   {:search "garden"
@@ -58,19 +53,12 @@
 
 (def claimed-request
   (request
-   {:request/status :claimed
+   {:request/id "hh-req-2"
+    :request/number 2
+    :request/title "Can someone help load soil?"
+    :request/status :claimed
     :request/claimed-by "user-helper"
     :request/claimed-by-email "helper@example.com"}))
-
-(def done-request
-  (request
-   {:request/status :done
-    :request/claimed-by "user-helper"
-    :request/claimed-by-email "helper@example.com"}))
-
-(def cancelled-request
-  (request
-   {:request/status :cancelled}))
 
 ;; -----------------------------------------------------------------------------
 ;; Hiccup inspection helpers
@@ -120,12 +108,6 @@
    (some #(str/includes? % text)
          (text-nodes tree))))
 
-(defn exact-text?
-  [tree text]
-  (boolean
-   (some #(= % text)
-         (text-nodes tree))))
-
 (defn find-elements
   [tree tag]
   (filter #(element? % tag)
@@ -159,10 +141,6 @@
   [tree]
   (find-elements tree :button))
 
-(defn anchors
-  [tree]
-  (find-elements tree :a))
-
 (defn input-by-name
   [tree name]
   (some
@@ -178,14 +156,6 @@
      (when (= url (:hx-post (attrs node)))
        node))
    (forms tree)))
-
-(defn anchor-by-hx-get
-  [tree url]
-  (some
-   (fn [node]
-     (when (= url (:hx-get (attrs node)))
-       node))
-   (anchors tree)))
 
 (defn oob-node?
   [node]
@@ -238,22 +208,6 @@
   (is (= "demo-user"
          (views/user-email nil))))
 
-(deftest status-label-and-pill-status-test
-  (testing "status label delegates to domain labels"
-    (is (= "Open" (views/status-label open-request)))
-    (is (= "Claimed" (views/status-label claimed-request)))
-    (is (= "Done" (views/status-label done-request)))
-    (is (= "Cancelled" (views/status-label cancelled-request))))
-
-  (testing "request statuses map to visual pill statuses"
-    (is (= :waiting (views/status-pill-status open-request)))
-    (is (= :active (views/status-pill-status claimed-request)))
-    (is (= :success (views/status-pill-status done-request)))
-    (is (= :muted (views/status-pill-status cancelled-request)))
-    (is (= :destructive
-           (views/status-pill-status
-            (assoc open-request :request/status :mystery))))))
-
 (deftest muted-test
   (let [node (views/muted "Quiet text")]
     (is (= :p (first node)))
@@ -286,6 +240,15 @@
     (is (= "hh-req-1" (hidden-input-value node routes/selected-param)))
     (is (= 3 (hidden-input-value node routes/visible-revision-param)))))
 
+(deftest board-state-hidden-inputs-test
+  (let [node (views/board-state-hidden-inputs
+              {:search "garden"
+               :selected-request-id "hh-req-1"
+               :visible-revision 3})]
+    (is (nil? (input-by-name node routes/search-param)))
+    (is (= "hh-req-1" (hidden-input-value node routes/selected-param)))
+    (is (= 3 (hidden-input-value node routes/visible-revision-param)))))
+
 (deftest oob-response-test
   (let [node (views/oob-response
               nil
@@ -297,44 +260,6 @@
     (is (find-by-id node "one"))
     (is (find-by-id node "two"))
     (is (= 2 (count (children node))))))
-
-;; -----------------------------------------------------------------------------
-;; Form/action helpers
-;; -----------------------------------------------------------------------------
-
-(deftest form-action-test
-  (let [node (views/form-action
-              ctx
-              {:to "/app/requests/hh-req-1/claim"
-               :text "Claim"
-               :variant :primary
-               :size :sm
-               :view-state view-state
-               :attrs {:data-test "claim-form"}})]
-    (is (= :form (first node)))
-    (is (= "post" (:method (attrs node))))
-    (is (= "/app/requests/hh-req-1/claim" (:hx-post (attrs node))))
-    (is (= "none" (:hx-swap (attrs node))))
-    (is (= "inline-flex" (:class (attrs node))))
-    (is (= "claim-form" (:data-test (attrs node))))
-    (is (input-by-name node "__anti-forgery-token"))
-    (is (= "garden" (hidden-input-value node routes/search-param)))
-    (is (= 3 (hidden-input-value node routes/visible-revision-param)))
-    (is (contains-text? node "Claim"))))
-
-(deftest action-button-test
-  (testing "action-button posts to the action URL"
-    (doseq [action [:claim :unclaim :take-over :done :cancel]]
-      (let [node (views/action-button
-                  ctx
-                  open-request
-                  helper
-                  action
-                  view-state)
-            expected-url (routes/action-url (:request/id open-request)
-                                            action)]
-        (is (= expected-url (:hx-post (attrs node))))
-        (is (contains-text? node (model/action-label action)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; App bar
@@ -375,20 +300,18 @@
 (deftest page-test
   (testing "page composes page shell, listener, bar, panels, search, and dialog"
     (with-redefs [ui/page-shell
-                  (fn [_ctx & body]
-                    (into [:page-shell] body))
+                  (fn [page-ctx & body]
+                    (into [:page-shell {:ctx page-ctx}] body))
 
                   client-plumbing/listener
-                  (fn [_ctx]
-                    [:listener {:id "client-listener"}])
+                  (fn [listener-ctx]
+                    [:listener {:id "client-listener"
+                                :ctx listener-ctx}])
 
                   ui/theme-dialog
-                  (fn [_ctx opts]
-                    [:theme-dialog opts])
-
-                  g/bars
-                  (fn [opts & children]
-                    (into [:bars opts] children))]
+                  (fn [theme-ctx opts]
+                    [:theme-dialog {:ctx theme-ctx
+                                    :opts opts}])]
       (let [toolbar [:div {:id views/request-toolbar-dom-id} "toolbar panel"]
             request-list [:div {:id views/request-list-dom-id} "list panel"]
             node (views/page
@@ -423,7 +346,6 @@
   (testing "stale refresh button gets extra highlight class"
     (is (str/includes? (views/refresh-button-class true)
                        "shadow-lg"))))
-
 
 (deftest request-toolbar-fragment-fresh-test
   (let [node (views/request-toolbar-fragment
@@ -463,8 +385,6 @@
                          views/create-request-dialog-id))
       (is (str/includes? (:onclick (attrs plus-button))
                          ".showModal()")))))
-
-
 
 (deftest request-toolbar-fragment-stale-test
   (let [node (views/request-toolbar-fragment
@@ -522,156 +442,6 @@
     (is (= "" (:value (attrs search-input))))))
 
 ;; -----------------------------------------------------------------------------
-;; Request cards
-;; -----------------------------------------------------------------------------
-
-(deftest card-selected-test
-  (is (true?
-       (views/card-selected?
-        open-request
-        {:selected-request-id (:request/id open-request)})))
-  (is (false?
-       (views/card-selected?
-        open-request
-        {:selected-request-id "something-else"})))
-  (is (false?
-       (views/card-selected?
-        open-request
-        {:selected-request-id nil}))))
-
-(deftest request-card-style-test
-  (testing "unselected cards use normal border"
-    (let [style (views/request-card-style false)]
-      (is (= "var(--border)" (:border-color style)))
-      (is (nil? (:box-shadow style)))))
-
-  (testing "selected cards use primary border and shadow"
-    (let [style (views/request-card-style true)]
-      (is (= "var(--primary)" (:border-color style)))
-      (is (string? (:box-shadow style))))))
-
-(deftest request-meta-test
-  (let [node (views/request-meta open-request)]
-    (is (contains-text? node "Garden"))
-    (is (contains-text? node "waiting"))))
-
-(deftest request-card-unselected-test
-  (let [node (views/request-card
-              ctx
-              {:request open-request
-               :user helper
-               :view-state view-state})
-        expected-select-url (routes/select-request-url
-                             (:request/id open-request)
-                             view-state)]
-    (is (= :article (first node)))
-    (is (= (str "humanhelp-request-" (:request/id open-request))
-           (:id (attrs node))))
-    (is (contains-text? node "Need help finding a rake"))
-    (is (contains-text? node "Jon"))
-    (is (contains-text? node "Garden"))
-
-    (let [card-link (anchor-by-hx-get node expected-select-url)]
-      (is card-link)
-      (is (= expected-select-url (:href (attrs card-link))))
-      (is (= (str "#" views/request-list-dom-id)
-             (:hx-target (attrs card-link))))
-      (is (= "outerHTML" (:hx-swap (attrs card-link)))))
-
-    (testing "unselected card does not render details/actions"
-      (is (not (contains-text? node "Looking for a sturdy rake for leaves.")))
-      (is (empty? (forms node))))))
-
-(deftest request-card-selected-owner-actions-test
-  (let [selected-state (assoc view-state
-                              :selected-request-id
-                              (:request/id open-request))
-        node (views/request-card
-              ctx
-              {:request open-request
-               :user owner
-               :view-state selected-state})]
-    (is (contains-text? node "Looking for a sturdy rake for leaves."))
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id open-request) :done)))
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id open-request) :cancel)))
-    (is (not
-         (form-by-hx-post
-          node
-          (routes/action-url (:request/id open-request) :claim))))))
-
-(deftest request-card-selected-helper-actions-test
-  (let [selected-state (assoc view-state
-                              :selected-request-id
-                              (:request/id open-request))
-        node (views/request-card
-              ctx
-              {:request open-request
-               :user helper
-               :view-state selected-state})]
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id open-request) :claim)))
-    (is (not
-         (form-by-hx-post
-          node
-          (routes/action-url (:request/id open-request) :done))))))
-
-(deftest request-card-selected-claimer-actions-test
-  (let [selected-state (assoc view-state
-                              :selected-request-id
-                              (:request/id claimed-request))
-        node (views/request-card
-              ctx
-              {:request claimed-request
-               :user helper
-               :view-state selected-state})]
-    (is (contains-text? node "claimed by helper@example.com"))
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id claimed-request) :done)))
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id claimed-request) :unclaim)))
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id claimed-request) :cancel)))))
-
-(deftest request-card-selected-take-over-actions-test
-  (let [selected-state (assoc view-state
-                              :selected-request-id
-                              (:request/id claimed-request))
-        node (views/request-card
-              ctx
-              {:request claimed-request
-               :user other-user
-               :view-state selected-state})]
-    (is (form-by-hx-post
-         node
-         (routes/action-url (:request/id claimed-request) :take-over)))
-    (is (not
-         (form-by-hx-post
-          node
-          (routes/action-url (:request/id claimed-request) :unclaim))))))
-
-(deftest request-card-terminal-actions-test
-  (doseq [request [done-request cancelled-request]]
-    (let [selected-state (assoc view-state
-                                :selected-request-id
-                                (:request/id request))
-          node (views/request-card
-                ctx
-                {:request request
-                 :user owner
-                 :view-state selected-state})]
-      (is (empty? (forms node))
-          (str "Terminal request should not render forms: "
-               (:request/status request))))))
-
-;; -----------------------------------------------------------------------------
 ;; Request list
 ;; -----------------------------------------------------------------------------
 
@@ -699,7 +469,27 @@
     (is (= "request-list" (:data-humanhelp-fragment (attrs node))))
     (is (= 3 (:data-latest-revision (attrs node))))
     (is (find-by-id node "humanhelp-request-hh-req-1"))
-    (is (contains-text? node "Need help finding a rake"))))
+    (is (find-by-id node "humanhelp-request-hh-req-2"))
+    (is (contains-text? node "Need help finding a rake"))
+    (is (contains-text? node "Can someone help load soil?"))))
+
+(deftest request-list-fragment-selected-card-test
+  (let [selected-state (assoc view-state
+                              :selected-request-id
+                              (:request/id open-request))
+        node (views/request-list-fragment
+              {:ctx ctx
+               :user owner
+               :view-state selected-state
+               :requests [open-request]
+               :latest-revision 3})]
+    (is (contains-text? node "Looking for a sturdy rake for leaves."))
+    (is (form-by-hx-post
+         node
+         (routes/action-url (:request/id open-request) :done)))
+    (is (form-by-hx-post
+         node
+         (routes/action-url (:request/id open-request) :cancel)))))
 
 (deftest request-list-fragment-empty-test
   (let [node (views/request-list-fragment
@@ -807,6 +597,18 @@
                  :open? true})]
       (is (true? (:open (attrs node)))))))
 
+(deftest create-request-dialog-fragment-test
+  (let [node (views/create-request-dialog-fragment
+              ctx
+              {:user owner
+               :values {:title "Need help"}
+               :errors {}
+               :open? true})]
+    (is (= :dialog (first node)))
+    (is (= views/create-request-dialog-id (:id (attrs node))))
+    (is (true? (:open (attrs node))))
+    (is (contains-text? node "Create request"))))
+
 ;; -----------------------------------------------------------------------------
 ;; OOB result views
 ;; -----------------------------------------------------------------------------
@@ -851,7 +653,6 @@
   (let [toolbar [:div {:id views/request-toolbar-dom-id} "toolbar"]
         request-list [:div {:id views/request-list-dom-id} "list"]
         node (views/refreshed-request-board-fragments
-              ctx
               {:toolbar toolbar
                :request-list request-list})]
     (is (oob-by-id node views/request-toolbar-dom-id))
@@ -863,16 +664,17 @@
   (let [toolbar [:div {:id views/request-toolbar-dom-id} "toolbar"]
         request-list [:div {:id views/request-list-dom-id} "list"]
         node (views/request-lifecycle-result
-              ctx
-              {:toolbar toolbar
+              {:action :claim
+               :request claimed-request
+               :toolbar toolbar
                :request-list request-list})]
     (is (oob-by-id node views/request-toolbar-dom-id))
-    (is (oob-by-id node views/request-list-dom-id))))
+    (is (oob-by-id node views/request-list-dom-id))
+    (is (contains-text? node "Claim"))))
 
 (deftest request-action-error-test
   (testing "specific message is rendered"
     (let [node (views/request-action-error
-                ctx
                 {:result {:status :error
                           :error {:message "Cannot claim this request."}}})]
       (is (contains-text? node "Request not updated"))
@@ -880,7 +682,6 @@
 
   (testing "fallback message is rendered"
     (let [node (views/request-action-error
-                ctx
                 {:result {:status :error}})]
       (is (contains-text? node "Request not updated"))
       (is (contains-text? node "That request action could not be completed.")))))
@@ -889,7 +690,6 @@
   (let [toolbar [:div {:id views/request-toolbar-dom-id} "toolbar"]
         request-list [:div {:id views/request-list-dom-id} "list"]
         node (views/reset-demo-result
-              ctx
               {:toolbar toolbar
                :request-list request-list})]
     (is (oob-by-id node views/request-toolbar-dom-id))

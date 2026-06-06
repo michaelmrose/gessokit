@@ -329,7 +329,7 @@
 
 (deftest live-panel-test
   (testing "request list panel keeps SSE/fetch trigger on stable wrapper"
-    (let [node (app/live-panel :request-list view-state)
+    (let [node (app/live-panel :request-list)
           a (attrs node)
           inner (first (children node))]
       (is (= :div (first node)))
@@ -352,7 +352,7 @@
              (:id (attrs inner))))))
 
   (testing "request toolbar panel keeps SSE/fetch trigger on stable wrapper"
-    (let [node (app/live-panel :request-toolbar view-state)
+    (let [node (app/live-panel :request-toolbar)
           a (attrs node)
           inner (first (children node))]
       (is (= "humanhelp-request-toolbar-fragment"
@@ -376,7 +376,7 @@
 (deftest live-panel-unknown-fragment-test
   (testing "unknown live panel fragments throw useful ex-info"
     (try
-      (app/live-panel :missing-fragment view-state)
+      (app/live-panel :missing-fragment)
       (is false "Expected live-panel to throw")
       (catch clojure.lang.ExceptionInfo e
         (is (str/includes? (ex-message e)
@@ -384,7 +384,7 @@
         (is (= :missing-fragment (:fragment (ex-data e))))))))
 
 (deftest page-panels-test
-  (let [panels (app/page-panels view-state)]
+  (let [panels (app/page-panels)]
     (is (find-by-id (:request-toolbar-panel panels)
                     views/request-toolbar-dom-id))
     (is (find-by-id (:request-list-panel panels)

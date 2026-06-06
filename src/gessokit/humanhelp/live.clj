@@ -71,7 +71,7 @@
   "All signed-in users may see the one fake Human Help store.
 
    Real helper/helpee authorization is intentionally out of scope for the demo."
-  [_ctx id]
+  [ctx id]
   (= store-id id))
 
 ;; -----------------------------------------------------------------------------
@@ -171,7 +171,7 @@
     :fragments
     {:request-toolbar
      {:scope :request-toolbar
-      :id-fn (fn [_id]
+      :id-fn (fn [id]
                views/request-toolbar-dom-id)
       :query request-toolbar-query
       :render request-toolbar-render
@@ -182,7 +182,7 @@
 
      :request-list
      {:scope :request-list
-      :id-fn (fn [_id]
+      :id-fn (fn [id]
                views/request-list-dom-id)
       :query request-list-query
       :render request-list-render

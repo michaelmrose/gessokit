@@ -13,7 +13,7 @@
   (:require
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.components.request-card.core :as request-card]
+   [gessokit.humanhelp.components.request-card.core :refer [request-card]]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.ui :as ui]))
@@ -342,7 +342,7 @@
    (if (seq requests)
      [:div {:class "content-stack-theme"}
       (for [request requests]
-        (request-card/request-card
+        (request-card
          ctx
          {:request request
           :user user
@@ -449,6 +449,15 @@
              open? (assoc :open true))
    (create-request-dialog-content ctx opts)])
 
+(defn create-request-dialog-fragment
+  [ctx {:keys [user values errors open?]}]
+  (create-request-dialog
+   ctx
+   {:user user
+    :values values
+    :errors errors
+    :open? open?}))
+
 ;; -----------------------------------------------------------------------------
 ;; Page
 ;; -----------------------------------------------------------------------------
@@ -518,15 +527,6 @@
    (when request-list
      (replace-request-list-oob request-list))))
 
-(defn create-request-dialog-fragment
-  [ctx {:keys [user values errors open?]}]
-  (create-request-dialog
-   ctx
-   {:user user
-    :values values
-    :errors errors
-    :open? open?}))
-
 (defn create-request-validation-error
   [ctx {:keys [user values errors]}]
   (replace-dialog-oob
@@ -561,13 +561,13 @@
                     "The request is now on the board.")})))
 
 (defn refreshed-request-board-fragments
-  [_ctx {:keys [toolbar request-list]}]
+  [{:keys [toolbar request-list]}]
   (fragments-oob
    {:toolbar toolbar
     :request-list request-list}))
 
 (defn request-lifecycle-result
-  [_ctx {:keys [action request toolbar request-list]}]
+  [{:keys [action request toolbar request-list]}]
   (oob-response
    (fragments-oob
     {:toolbar toolbar
@@ -580,7 +580,7 @@
        :description (model/action-result-message action request)}))))
 
 (defn request-action-error
-  [_ctx {:keys [result]}]
+  [{:keys [result]}]
   (g/render-toast-oob
    {:variant :danger
     :duration 7000
@@ -591,7 +591,7 @@
                      "That request action could not be completed.")}))
 
 (defn reset-demo-result
-  [_ctx {:keys [toolbar request-list]}]
+  [{:keys [toolbar request-list]}]
   (oob-response
    (fragments-oob
     {:toolbar toolbar

@@ -12,7 +12,6 @@
    The Human Help feature code is isolated under gessokit.humanhelp.* so the
    example app can be removed cleanly from a generated template project."
   (:require
-   [clojure.string :as str]
    [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
@@ -101,7 +100,7 @@
     (string? x)
     (try
       (UUID/fromString x)
-      (catch Exception _
+      (catch Exception e
         nil))
 
     :else
@@ -151,7 +150,7 @@
                           :where [:= :xt/id uid]})
                 first
                 :user/email)
-        (catch Exception _
+        (catch Exception e
           nil)))))
 
 (defn current-user-email
@@ -266,7 +265,7 @@
 
    Do not bake q/selected/visible-revision into hx-get. The current
    #humanhelp-board-state form is the source of truth for fragment fetches."
-  [fragment-name _view-state]
+  [fragment-name]
   (let [dom-id (fragment-dom-id fragment-name)]
     [:div {:data-gesso-live-fragment (fragment-label fragment-name)
            :hx-ext "sse"
@@ -280,9 +279,9 @@
 
 (defn page-panels
   "Return the stable live panels needed for the Human Help page."
-  [view-state]
-  {:request-toolbar-panel (live-panel :request-toolbar view-state)
-   :request-list-panel (live-panel :request-list view-state)})
+  []
+  {:request-toolbar-panel (live-panel :request-toolbar)
+   :request-list-panel (live-panel :request-list)})
 
 (defn board-state-form-oob
   "Render an OOB replacement for the board-state/search form.
@@ -314,7 +313,7 @@
     (merge
      {:user user
       :view-state view-state}
-     (page-panels view-state))))
+     (page-panels))))
 
 (defn fragment-render-options
   [ctx]
@@ -503,7 +502,6 @@
      (with-board-state-oob
        ctx
        (views/refreshed-request-board-fragments
-        ctx
         (board-oob ctx view-state))
        view-state))))
 
@@ -575,7 +573,6 @@
          (with-board-state-oob
            ctx
            (views/request-lifecycle-result
-            ctx
             (merge
              {:user user
               :action action
@@ -588,7 +585,6 @@
 
       (html
        (views/request-action-error
-        ctx
         {:user user
          :request-id id
          :action action
@@ -654,7 +650,6 @@
      (with-board-state-oob
        ctx
        (views/reset-demo-result
-        ctx
         (merge
          {:user user
           :result result
