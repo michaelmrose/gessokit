@@ -43,14 +43,16 @@
   (shell "clj -M:dev dev")
 
   themes
-  (let [gesso-path (-> (shell {:out :string}
-                              "bb" "-m" "gesso.build.find-path" "gesso")
-                       :out
-                       clojure.string/trim)]
-    (when (seq gesso-path)
-      (babashka.classpath/add-classpath (str gesso-path "/src"))
-      (babashka.classpath/add-classpath (str gesso-path "/resources")))
-    ((requiring-resolve 'gesso.build.themes/build!)
-     {:input-dir "resources/themes"
-      :output-file "resources/public/gesso/app-themes.css"}))
+(let [gesso-path (-> (shell {:out :string}
+                          "bb" "-m" "gesso.build.find-path" "gesso")
+                     :out
+                     clojure.string/trim)]
+  (babashka.classpath/add-classpath (str gesso-path "/src"))
+  (babashka.classpath/add-classpath (str gesso-path "/resources"))
+  ((requiring-resolve 'gesso.build.themes/build!)
+   {:input-dir "resources/themes"
+    :output-file "resources/public/gesso/app-themes.css"
+    :component-css-dirs [(str gesso-path "/gesso/components")
+                         "src/gessokit/components"
+                         "src/gessokit/site/components"]}))
   }}
