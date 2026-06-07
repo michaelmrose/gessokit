@@ -13,12 +13,18 @@
     "storage"})
 
 (def excluded-files
-  #{ ".nrepl-port" ".DS_Store" "config.env"})
+  #{".nrepl-port" ".DS_Store" "config.env"})
 
 (def binary-exts
   #{".png" ".jpg" ".jpeg" ".gif" ".bmp" ".ico" ".webp"
     ".pdf" ".zip" ".jar" ".class" ".so" ".dylib" ".dll"
     ".woff" ".woff2" ".ttf" ".otf"})
+
+(def main-ns-placeholder
+  "{{main/ns}}")
+
+(def main-file-placeholder
+  "{{main/file}}")
 
 (defn usage! []
   (binding [*out* *err*]
@@ -26,44 +32,59 @@
     (println "  bb to-template.clj TEMPLATE-DIR SOURCE-PRIMARY-NS [TEMPLATE-NAME]")
     (println)
     (println "Example:")
-    (println "  bb to-template.clj gesso-template-deps-new gesso-template")
+    (println "  bb to-template.clj gesso-template-deps-new gessokit")
     (println)
     (println "TEMPLATE-NAME defaults to local/TEMPLATE-DIR."))
   (System/exit 1))
 
-(defn path-str [p]
+(defn fail-path-exists!
+  [path]
+  (binding [*out* *err*]
+    (println "Path already exists:" (str (fs/normalize path))))
+  (System/exit 2))
+
+(defn path-str
+  [p]
   (str (fs/normalize p)))
 
-(defn io-str [p]
+(defn io-str
+  [p]
   (str p))
 
-(defn rel-str [root p]
+(defn rel-str
+  [root p]
   (path-str (fs/relativize root p)))
 
-(defn ext [p]
+(defn ext
+  [p]
   (let [n (fs/file-name p)]
     (if (str/starts-with? n ".")
       n
       (or (some-> n fs/extension (str ".")) ""))))
 
-(defn ns->file [s]
+(defn ns->file
+  [s]
   (-> s
       (str/replace "." "/")
       (str/replace "-" "_")))
 
-(defn template-path-parts [template-name]
+(defn template-path-parts
+  [template-name]
   (str/split (ns->file template-name) #"/"))
 
-(defn default-template-name [template-dir-name]
+(defn default-template-name
+  [template-dir-name]
   (str "local/" (fs/file-name template-dir-name)))
 
-(defn sibling-path [source-root dir-name]
+(defn sibling-path
+  [source-root dir-name]
   (let [p (fs/path dir-name)]
     (if (fs/absolute? p)
       p
       (fs/path (fs/parent source-root) dir-name))))
 
-(defn excluded? [source-root p]
+(defn excluded?
+  [source-root p]
   (let [rel      (rel-str source-root p)
         parts    (str/split rel #"/")
         name     (fs/file-name p)
@@ -78,7 +99,8 @@
     (or (contains? excluded-files name)
         (some excluded-dirs prefixes))))
 
-(defn has-nul-byte? [p]
+(defn has-nul-byte?
+  [p]
   (try
     (with-open [in (io/input-stream (io/file (io-str p)))]
       (let [buf (byte-array 8192)
@@ -89,73 +111,117 @@
             (>= i n) false
             (zero? (aget buf i)) true
             :else (recur (inc i))))))
-    (catch Throwable _
+    (catch Throwable e
       false)))
 
-(defn binary-file? [p]
+(defn binary-file?
+  [p]
   (or (contains? binary-exts (str/lower-case (ext p)))
       (has-nul-byte? p)))
 
-(defn source-ns-pattern [source-ns]
+(defn source-ns-pattern
+  [source-ns]
   ;; Match source ns as a root-ish token:
   ;;
-  ;;   gesso-template
-  ;;   gesso-template.app
-  ;;   gesso-template/foo
-  ;;   gesso-template-test
+  ;;   gessokit
+  ;;   gessokit.app
+  ;;   gessokit/foo
+  ;;   gessokit-test
   ;;
   ;; Avoid:
   ;;
-  ;;   mygesso-template
-  ;;   gesso-templatex
-  ;;   com.gesso-template
+  ;;   mygessokit
+  ;;   gessokitx
+  ;;   com.gessokit
   (re-pattern
    (str "(^|[^A-Za-z0-9_.-])"
         (java.util.regex.Pattern/quote source-ns)
         "(?![A-Za-z0-9_])")))
 
-(defn source-file-pattern [source-file]
+(defn source-file-pattern
+  [source-file]
   ;; Match file/path spelling as a root-ish token:
   ;;
-  ;;   gesso_template
-  ;;   gesso_template/app.clj
-  ;;   src/gesso_template/app.clj
-  ;;   gesso_template_test.clj
+  ;;   gessokit
+  ;;   gessokit/app.clj
+  ;;   src/gessokit/app.clj
+  ;;   gessokit_test.clj
   ;;
   ;; Avoid:
   ;;
-  ;;   mygesso_template
-  ;;   gesso_templatex
+  ;;   mygessokit
+  ;;   gessokitx
   (re-pattern
    (str "(^|[^A-Za-z0-9_.-])"
         (java.util.regex.Pattern/quote source-file)
         "(?![A-Za-z0-9])")))
 
-(defn replace-token [s pattern replacement]
-  (str/replace s pattern
-               (fn [[_ prefix]]
-                 (str prefix replacement))))
+(defn source-file-path-pattern
+  [source-file]
+  ;; Match source-file only as a filesystem path segment.
+  ;;
+  ;;   src/gessokit/components
+  ;;   src/gessokit.clj
+  ;;   test/gessokit_test.clj
+  ;;
+  ;; Avoid namespace-looking text:
+  ;;
+  ;;   gessokit.humanhelp.app
+  ;;   gessokit-test
+  (re-pattern
+   (str "(^|/)"
+        (java.util.regex.Pattern/quote source-file)
+        "(?=$|/|_|\\.)")))
 
-(defn parameterize-content [s source-primary-ns]
+(defn replace-token
+  [s pattern replacement]
+  (str/replace
+   s
+   pattern
+   (fn [match]
+     (let [prefix (second match)]
+       (str prefix replacement)))))
+
+(defn parameterize-content
+  [s source-primary-ns]
   (let [source-file (ns->file source-primary-ns)]
     (-> s
-        (replace-token (source-ns-pattern source-primary-ns) "{{main/ns}}")
-        (replace-token (source-file-pattern source-file) "{{main/file}}"))))
+        ;; Path-looking occurrences inside text files should become
+        ;; {{main/file}}, so a dotted target ns like net.humanhelp produces
+        ;; net/humanhelp on disk.
+        (replace-token
+         (source-file-path-pattern source-file)
+         main-file-placeholder)
 
-(defn parameterize-path [rel source-primary-ns]
-  (parameterize-content rel source-primary-ns))
+        ;; Namespace-looking occurrences should become {{main/ns}}, so Clojure
+        ;; namespaces become net.humanhelp.foo instead of net/humanhelp.foo.
+        (replace-token
+         (source-ns-pattern source-primary-ns)
+         main-ns-placeholder))))
 
-(defn read-text-safe [p]
+(defn parameterize-path
+  [rel source-primary-ns]
+  ;; Filesystem paths should always use {{main/file}}, never {{main/ns}}.
+  (let [source-file (ns->file source-primary-ns)]
+    (replace-token
+     rel
+     (source-file-pattern source-file)
+     main-file-placeholder)))
+
+(defn read-text-safe
+  [p]
   (try
     (slurp (io-str p))
-    (catch Throwable _
+    (catch Throwable e
       nil)))
 
-(defn write-text-file! [p s]
+(defn write-text-file!
+  [p s]
   (fs/create-dirs (fs/parent p))
   (spit (io-str p) s))
 
-(defn copy-raw-file! [src dst]
+(defn copy-raw-file!
+  [src dst]
   (fs/create-dirs (fs/parent dst))
   (fs/copy src dst {:replace-existing true}))
 
@@ -219,7 +285,8 @@
            :from rel
            :to   rel})))))
 
-(defn transform-entry [src file-map opts]
+(defn transform-entry
+  [src file-map opts]
   (cond
     (seq file-map)
     (into [src file-map] opts)
@@ -230,7 +297,8 @@
     :else
     nil))
 
-(defn template-edn [rename-map raw? raw-rename-map]
+(defn template-edn
+  [rename-map raw? raw-rename-map]
   (let [transforms (cond-> []
                      (seq rename-map)
                      (conj (transform-entry "rename" rename-map [:only]))
@@ -245,19 +313,22 @@
       (seq transforms)
       (assoc :transform transforms))))
 
-(defn write-template-edn! [template-resource-dir rename-map raw? raw-rename-map]
+(defn write-template-edn!
+  [template-resource-dir rename-map raw? raw-rename-map]
   (write-text-file!
    (fs/path template-resource-dir "template.edn")
    (with-out-str
      (pprint/pprint
       (template-edn rename-map raw? raw-rename-map)))))
 
-(defn write-deps-edn! [template-dir]
+(defn write-deps-edn!
+  [template-dir]
   (write-text-file!
    (fs/path template-dir "deps.edn")
    "{:paths [\"resources\"]}\n"))
 
-(defn write-readme! [template-dir template-name template-resource-dir]
+(defn write-readme!
+  [template-dir template-name template-resource-dir]
   (write-text-file!
    (fs/path template-dir "README.md")
    (str "# Generated deps-new Template\n\n"
@@ -281,7 +352,8 @@
                                   (fs/path template-resource-dir "template.edn")))
         "\n```\n")))
 
-(defn remaining-content-matches [dirs source-primary-ns]
+(defn remaining-content-matches
+  [dirs source-primary-ns]
   (let [source-file (ns->file source-primary-ns)
         patterns    [(re-pattern (java.util.regex.Pattern/quote source-primary-ns))
                      (re-pattern (java.util.regex.Pattern/quote source-file))]]
@@ -298,7 +370,8 @@
                 (when (seq hits)
                   [(path-str p) hits]))))))))
 
-(defn warn-leftovers! [dirs source-primary-ns]
+(defn warn-leftovers!
+  [dirs source-primary-ns]
   (let [leftovers (remaining-content-matches dirs source-primary-ns)]
     (when (seq leftovers)
       (binding [*out* *err*]
@@ -312,7 +385,8 @@
       (println)
       (println "Template was still written, but inspect the warnings above."))))
 
-(defn main [& args]
+(defn main
+  [& args]
   (let [[template-dir-name source-primary-ns template-name & more] args]
     (when (or (nil? template-dir-name)
               (nil? source-primary-ns)
@@ -333,10 +407,7 @@
           raw-rename-dir        (fs/path template-resource-dir "raw-rename")]
 
       (when (fs/exists? template-dir)
-        (binding [*out* *err*]
-          (println "Refusing to overwrite existing template dir:" (path-str template-dir))
-          (println "Delete it first if you want to regenerate it."))
-        (System/exit 2))
+        (fail-path-exists! template-dir))
 
       (fs/create-dirs root-dir)
       (fs/create-dirs rename-dir)
