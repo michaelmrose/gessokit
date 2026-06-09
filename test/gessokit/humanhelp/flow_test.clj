@@ -8,6 +8,7 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
+   [gessokit.middleware :as mid]
    [xtdb.node :as xtn]))
 
 ;; -----------------------------------------------------------------------------
@@ -74,7 +75,69 @@
 (use-fixtures :each reset-data-fixture)
 
 ;; -----------------------------------------------------------------------------
-;; Helpers
+;; Route dispatch helpers
+;; -----------------------------------------------------------------------------
+
+(defn route-pairs
+  [route-tree]
+  (filter
+   (fn [x]
+     (and (vector? x)
+          (string? (first x))
+          (map? (second x))))
+   (tree-seq
+    (fn [x]
+      (and (sequential? x)
+           (not (string? x))))
+    seq
+    route-tree)))
+
+(defn route-strings
+  [route-tree]
+  (set
+   (filter string?
+           (tree-seq
+            (fn [x]
+              (and (sequential? x)
+                   (not (string? x))))
+            seq
+            route-tree))))
+
+(defn route-map-for
+  [route]
+  (second
+   (first
+    (filter #(= route (first %))
+            (route-pairs (:routes app/module))))))
+
+(defn route-handler
+  [method route]
+  (or (get (route-map-for route) method)
+      (throw
+       (ex-info "No mounted Human Help route handler."
+                {:method method
+                 :route route
+                 :route-map (route-map-for route)}))))
+
+(defn ctx-with-route-data
+  [ctx {:keys [params path-params]}]
+  (cond-> ctx
+    (some? params)
+    (assoc :params params)
+
+    (some? path-params)
+    (assoc :path-params path-params
+           :reitit.core/match {:path-params path-params})))
+
+(defn endpoint!
+  ([method route ctx]
+   (endpoint! method route ctx {}))
+  ([method route ctx route-data]
+   ((route-handler method route)
+    (ctx-with-route-data ctx route-data))))
+
+;; -----------------------------------------------------------------------------
+;; Response helpers
 ;; -----------------------------------------------------------------------------
 
 (defn response-body
@@ -91,26 +154,66 @@
 (defn body-contains?
   [response text]
   (boolean
-   (str/includes? (or (response-body response) "") text)))
+   (str/includes? (or (response-body response) "")
+                  (str text))))
+
+(defn response-full-page?
+  [response]
+  (let [body (or (response-body response) "")]
+    (or (str/includes? body "<body")
+        (str/includes? body "<main")
+        (str/includes? body "data-bars-root")
+        (str/includes? body "min-h-screen flex flex-col")
+        (str/includes? body "Welcome to Human Help."))))
+
+(defn assert-html-response
+  [response]
+  (is (html-response? response)
+      (pr-str {:status (:status response)
+               :headers (:headers response)
+               :body-prefix (subs (or (:body response) "")
+                                  0
+                                  (min 240 (count (or (:body response) ""))))})))
+
+(defn assert-not-full-page-response
+  [response]
+  (is (not (response-full-page? response))
+      "Fragment/action endpoint returned page-shell/full-page-looking HTML."))
+
+(defn assert-fragment-or-oob-response
+  [response]
+  (assert-html-response response)
+  (assert-not-full-page-response response))
 
 (defn oob-response-for?
   [response dom-id]
   (and (body-contains? response (str "id=\"" dom-id "\""))
        (body-contains? response "hx-swap-oob=\"outerHTML\"")))
 
-(defn ctx-with-params
-  [ctx params]
-  (assoc ctx :params params))
+(defn assert-oob
+  [response dom-id]
+  (is (oob-response-for? response dom-id)
+      (str "Missing OOB replacement for #" dom-id)))
 
-(defn ctx-with-request-id
-  [ctx request-id]
-  (assoc ctx :path-params {:request-id request-id}))
+(defn assert-not-oob
+  [response dom-id]
+  (is (not (oob-response-for? response dom-id))
+      (str "Unexpected OOB replacement for #" dom-id)))
 
-(defn ctx-with-selected-request
-  [ctx request-id]
-  (assoc ctx
-         :path-params {:request-id request-id}
-         :params {"selected" request-id}))
+(defn assert-fragment-root
+  [response dom-id]
+  (assert-fragment-or-oob-response response)
+  (is (body-contains? response (str "id=\"" dom-id "\""))))
+
+(defn terminal-action-url-present?
+  [response request-id]
+  (some
+   #(body-contains? response (routes/action-url request-id %))
+   [:claim :unclaim :take-over :done :cancel]))
+
+;; -----------------------------------------------------------------------------
+;; Request helpers
+;; -----------------------------------------------------------------------------
 
 (defn create-params
   [overrides]
@@ -135,6 +238,10 @@
   [ctx request-id]
   (:request/claimed-by (data/request-by-id ctx request-id)))
 
+(defn request-claimer-email
+  [ctx request-id]
+  (:request/claimed-by-email (data/request-by-id ctx request-id)))
+
 (defn request-titles
   [requests]
   (set (map :request/title requests)))
@@ -150,21 +257,27 @@
   (request-titles
    (:requests (data/board-data ctx view-state))))
 
+(defn latest-view-state
+  [ctx]
+  {:search ""
+   :selected-request-id nil
+   :visible-revision (data/latest-revision ctx)})
+
 (defn open-seed-request
   [ctx]
   (first
    (filter #(= :open (:request/status %))
            (data/all-requests ctx))))
 
-(defn owner-ctx-for
-  [ctx request]
-  (assoc ctx
-         :user/id (:request/customer-user-id request)
-         :user/email (str (:request/customer-user-id request)
-                          "@example.com")
-         :session {:uid (:request/customer-user-id request)
-                   :email (str (:request/customer-user-id request)
-                               "@example.com")}))
+(defn selected-params
+  [ctx request-id]
+  {"q" ""
+   "selected" request-id
+   "visible-revision" (str (data/latest-revision ctx))})
+
+;; -----------------------------------------------------------------------------
+;; Side-effect recorders
+;; -----------------------------------------------------------------------------
 
 (defn notify-recorder
   [calls]
@@ -185,52 +298,148 @@
     (swap! calls inc)
     {:sent 1}))
 
-(defn stub-toolbar
-  [_ctx _view-state]
-  [:div {:id views/request-toolbar-dom-id} "toolbar"])
-
-(defn stub-list
-  [_ctx _view-state]
-  [:div {:id views/request-list-dom-id} "list"])
-
-(defmacro with-app-render-stubs
-  [& body]
-  `(with-redefs [app/render-toolbar-node stub-toolbar
-                 app/render-list-node stub-list]
+(defmacro with-notify-recorder
+  [notify-calls & body]
+  `(with-redefs [hh-live/notify! (notify-recorder ~notify-calls)]
      ~@body))
 
-(defmacro with-app-side-effect-recorders
+(defmacro with-create-side-effect-recorders
   [notify-calls request-toasts & body]
   `(with-redefs [hh-live/notify! (notify-recorder ~notify-calls)
                  app/send-new-request-toast-safely!
                  (request-toast-recorder ~request-toasts)]
      ~@body))
 
-(defn create-request-through-app!
+(defmacro with-reset-side-effect-recorders
+  [notify-calls reset-toasts & body]
+  `(with-redefs [hh-live/notify! (notify-recorder ~notify-calls)
+                 app/send-reset-toast-safely!
+                 (reset-toast-recorder ~reset-toasts)]
+     ~@body))
+
+(defn create-request-through-route!
   [ctx params]
   (let [notify-calls (atom [])
         request-toasts (atom [])]
-    (with-app-render-stubs
-      (with-app-side-effect-recorders notify-calls request-toasts
-        {:response (app/create-request! (ctx-with-params ctx params))
-         :notify-calls @notify-calls
-         :request-toasts @request-toasts}))))
+    (with-create-side-effect-recorders notify-calls request-toasts
+      {:response (endpoint!
+                  :post
+                  routes/create-request-route
+                  ctx
+                  {:params params})
+       :notify-calls @notify-calls
+       :request-toasts @request-toasts})))
 
-(defn lifecycle-through-app!
-  [handler ctx request-id]
+(defn lifecycle-through-route!
+  [route ctx request-id]
   (let [notify-calls (atom [])]
-    (with-app-render-stubs
-      (with-redefs [hh-live/notify! (notify-recorder notify-calls)]
-        {:response (handler (ctx-with-request-id ctx request-id))
-         :notify-calls @notify-calls}))))
+    (with-notify-recorder notify-calls
+      {:response (endpoint!
+                  :post
+                  route
+                  ctx
+                  {:path-params {:request-id request-id}
+                   :params (selected-params ctx request-id)})
+       :notify-calls @notify-calls})))
 
-(defn refresh-through-app!
+(defn refresh-through-route!
   [ctx params]
-  (with-app-render-stubs
-    (app/refresh-requests! (ctx-with-params ctx params))))
+  (endpoint!
+   :post
+   routes/refresh-requests-route
+   ctx
+   {:params params}))
+
+(def lifecycle-routes
+  {:claim routes/claim-request-route
+   :unclaim routes/unclaim-request-route
+   :take-over routes/take-over-request-route
+   :done routes/done-request-route
+   :cancel routes/cancel-request-route})
+
+(def expected-change-topic
+  {:claim :request/claimed
+   :unclaim :request/unclaimed
+   :take-over :request/taken-over
+   :done :request/done
+   :cancel :request/cancelled})
+
+(defn lifecycle-action-through-route!
+  [action ctx request-id]
+  (lifecycle-through-route!
+   (get lifecycle-routes action)
+   ctx
+   request-id))
+
+(defn first-change-topic
+  [result]
+  (:topic (nth (first (:notify-calls result)) 2)))
 
 ;; -----------------------------------------------------------------------------
-;; Initial state flow
+;; Module/route wiring
+;; -----------------------------------------------------------------------------
+
+(deftest module-route-shape-test
+  (testing "module exports live rules and mounts under the Human Help base path"
+    (is (= hh-live/live-rules (:live-rules app/module)))
+    (let [route-tree (first (:routes app/module))]
+      (is (= routes/base-path (first route-tree)))
+      (is (= {:middleware [mid/wrap-signed-in]}
+             (second route-tree)))))
+
+  (testing "all expected app routes are mounted"
+    (let [strings (route-strings (:routes app/module))]
+      (doseq [route [routes/base-path
+                     routes/request-toolbar-fragment-route
+                     routes/request-list-fragment-route
+                     routes/create-request-dialog-fragment-route
+                     routes/request-toolbar-stream-route
+                     routes/request-list-stream-route
+                     routes/create-request-route
+                     routes/refresh-requests-route
+                     routes/search-requests-route
+                     routes/select-request-route
+                     routes/claim-request-route
+                     routes/unclaim-request-route
+                     routes/take-over-request-route
+                     routes/done-request-route
+                     routes/cancel-request-route
+                     routes/reset-demo-route]]
+        (is (contains? strings route)
+            (str "Missing route: " route)))))
+
+  (testing "mounted handlers are the app boundary functions"
+    (is (= {:get app/app-page}
+           (route-map-for "")))
+    (is (= {:get app/request-toolbar-fragment}
+           (route-map-for routes/request-toolbar-fragment-route)))
+    (is (= {:get app/request-list-fragment}
+           (route-map-for routes/request-list-fragment-route)))
+    (is (= {:get app/create-request-dialog-fragment}
+           (route-map-for routes/create-request-dialog-fragment-route)))
+    (is (= {:post app/create-request!}
+           (route-map-for routes/create-request-route)))
+    (is (= {:post app/refresh-requests!}
+           (route-map-for routes/refresh-requests-route)))
+    (is (= {:get app/search-requests}
+           (route-map-for routes/search-requests-route)))
+    (is (= {:get app/select-request}
+           (route-map-for routes/select-request-route)))
+    (is (= {:post app/claim-request!}
+           (route-map-for routes/claim-request-route)))
+    (is (= {:post app/unclaim-request!}
+           (route-map-for routes/unclaim-request-route)))
+    (is (= {:post app/take-over-request!}
+           (route-map-for routes/take-over-request-route)))
+    (is (= {:post app/mark-request-done!}
+           (route-map-for routes/done-request-route)))
+    (is (= {:post app/cancel-request!}
+           (route-map-for routes/cancel-request-route)))
+    (is (= {:post app/reset-demo!}
+           (route-map-for routes/reset-demo-route)))))
+
+;; -----------------------------------------------------------------------------
+;; Initial page/fragment flow
 ;; -----------------------------------------------------------------------------
 
 (deftest initial-state-flow-test
@@ -274,6 +483,8 @@
           list-panel (:request-list-panel page-data)]
       (is (= "sse" (get-in toolbar-panel [1 :hx-ext])))
       (is (= "sse" (get-in list-panel [1 :hx-ext])))
+      (is (nil? (get-in toolbar-panel [1 :sse-swap])))
+      (is (nil? (get-in list-panel [1 :sse-swap])))
       (is (str/includes? (get-in toolbar-panel [1 :hx-trigger])
                          "sse:live-update"))
       (is (str/includes? (get-in list-panel [1 :hx-trigger])
@@ -281,36 +492,79 @@
       (is (= (str "#" views/board-state-form-id)
              (get-in toolbar-panel [1 :hx-include])))
       (is (= (str "#" views/board-state-form-id)
-             (get-in list-panel [1 :hx-include]))))))
+             (get-in list-panel [1 :hx-include])))
+      (is (= (str "#" views/request-toolbar-dom-id)
+             (get-in toolbar-panel [1 :hx-target])))
+      (is (= (str "#" views/request-list-dom-id)
+             (get-in list-panel [1 :hx-target]))))))
+
+(deftest mounted-fragment-endpoint-flow-test
+  (testing "toolbar fragment endpoint returns only toolbar HTML"
+    (let [ctx (base-ctx)
+          response (endpoint!
+                    :get
+                    routes/request-toolbar-fragment-route
+                    ctx
+                    {:params {"q" ""
+                              "visible-revision"
+                              (str (data/latest-revision ctx))}})]
+      (assert-fragment-root response views/request-toolbar-dom-id)
+      (is (body-contains? response "Requests"))
+      (is (not (body-contains? response views/request-list-dom-id)))))
+
+  (testing "request list fragment endpoint returns only list HTML"
+    (let [ctx (base-ctx)
+          response (endpoint!
+                    :get
+                    routes/request-list-fragment-route
+                    ctx
+                    {:params {"q" ""
+                              "visible-revision"
+                              (str (data/latest-revision ctx))}})]
+      (assert-fragment-root response views/request-list-dom-id)
+      (is (not (body-contains? response views/request-toolbar-dom-id)))))
+
+  (testing "create dialog fragment endpoint returns only dialog HTML"
+    (let [response (endpoint!
+                    :get
+                    routes/create-request-dialog-fragment-route
+                    (base-ctx))]
+      (assert-fragment-root response views/create-request-dialog-id)
+      (is (body-contains? response "Create request"))
+      (is (body-contains? response "open")))))
 
 ;; -----------------------------------------------------------------------------
 ;; Create request flow
 ;; -----------------------------------------------------------------------------
 
 (deftest create-request-valid-flow-test
-  (testing "valid app create mutates store, emits live change, sends toast, and returns OOB"
+  (testing "valid mounted create route mutates store, emits live change, sends toast, and returns OOB"
     (let [ctx (base-ctx)
           before-revision (data/latest-revision ctx)
+          before-count (count (data/all-requests ctx))
           title "Need help finding purple gloves"
           params (create-params
                   {"title" title
                    "area" "Garden"
                    "details" "Large purple gloves"
                    "customer-name" "Avery"})
-          result (create-request-through-app! ctx params)
+          result (create-request-through-route! ctx params)
           response (:response result)
           created (request-by-title ctx title)]
-      (is (html-response? response))
+      (assert-fragment-or-oob-response response)
       (is created)
+      (is (= (inc before-count) (count (data/all-requests ctx))))
       (is (= (inc before-revision) (data/latest-revision ctx)))
       (is (= :open (:request/status created)))
       (is (= "owner" (:request/customer-user-id created)))
       (is (= "Avery" (:request/customer-name created)))
+      (is (= "Garden" (:request/area created)))
+      (is (= "Large purple gloves" (:request/details created)))
 
       (is (= 1 (count (:notify-calls result))))
       (let [[live-system ctx' change] (first (:notify-calls result))]
         (is (= ::live-system live-system))
-        (is (= (ctx-with-params ctx params) ctx'))
+        (is (= (assoc ctx :params params) ctx'))
         (is (= :request/created (:topic change)))
         (is (= model/store-id (:id change)))
         (is (= model/store-id (:store/id change)))
@@ -325,29 +579,50 @@
                 :user/email "owner@example.com"}
                user)))
 
-      (is (oob-response-for? response views/request-toolbar-dom-id))
-      (is (oob-response-for? response views/request-list-dom-id))
-      (is (oob-response-for? response views/create-request-dialog-id))
-      (is (oob-response-for? response views/board-state-form-id)))))
+      (assert-oob response views/request-toolbar-dom-id)
+      (assert-oob response views/request-list-dom-id)
+      (assert-oob response views/create-request-dialog-id)
+      (assert-oob response views/board-state-form-id)
+      (is (body-contains? response "Request created")))))
+
+(deftest create-request-repeated-param-flow-test
+  (testing "mounted create route uses the final scalar value for repeated params"
+    (let [ctx (base-ctx)
+          result (create-request-through-route!
+                  ctx
+                  {"title" ["Old title" "Final title"]
+                   "area" ["Old area" "Final area"]
+                   "details" ["Old details" "Final details"]
+                   "customer-name" ["Old customer" "Final customer"]})
+          response (:response result)
+          created (request-by-title ctx "Final title")]
+      (assert-fragment-or-oob-response response)
+      (is created)
+      (is (= "Final area" (:request/area created)))
+      (is (= "Final details" (:request/details created)))
+      (is (= "Final customer" (:request/customer-name created)))
+      (is (nil? (request-by-title ctx "Old title"))))))
 
 (deftest create-request-invalid-flow-test
-  (testing "invalid app create does not mutate, notify, or toast"
+  (testing "invalid mounted create route does not mutate, notify, or toast"
     (let [ctx (base-ctx)
           before-revision (data/latest-revision ctx)
           before-requests (data/all-requests ctx)
-          result (create-request-through-app!
+          result (create-request-through-route!
                   ctx
                   {"title" ""
-                   "area" ""})
+                   "area" ""
+                   "details" ""
+                   "customer-name" ""})
           response (:response result)]
-      (is (html-response? response))
+      (assert-fragment-or-oob-response response)
       (is (= before-revision (data/latest-revision ctx)))
       (is (= before-requests (data/all-requests ctx)))
       (is (empty? (:notify-calls result)))
       (is (empty? (:request-toasts result)))
-      (is (oob-response-for? response views/create-request-dialog-id))
-      (is (not (oob-response-for? response views/request-toolbar-dom-id)))
-      (is (not (oob-response-for? response views/request-list-dom-id)))
+      (assert-oob response views/create-request-dialog-id)
+      (assert-not-oob response views/request-toolbar-dom-id)
+      (assert-not-oob response views/request-list-dom-id)
       (is (body-contains? response "Create request")))))
 
 ;; -----------------------------------------------------------------------------
@@ -360,7 +635,7 @@
           helper (helper-ctx)
           viewer-b-visible-revision (data/latest-revision helper)
           title "Need help loading cedar mulch"
-          create-result (create-request-through-app!
+          create-result (create-request-through-route!
                          owner
                          (create-params
                           {"title" title
@@ -380,7 +655,7 @@
                        helper
                        {:search ""
                         :visible-revision latest})]
-      (is (html-response? (:response create-result)))
+      (assert-fragment-or-oob-response (:response create-result))
       (is (= (inc viewer-b-visible-revision) latest))
 
       (is (true? (:stale? stale-toolbar)))
@@ -390,17 +665,15 @@
       (is (contains? (request-titles (:requests fresh-board))
                      title))
 
-      (let [refresh-response (refresh-through-app!
+      (let [refresh-response (refresh-through-route!
                               helper
-                              {"visible-revision"
+                              {"q" ""
+                               "visible-revision"
                                (str viewer-b-visible-revision)})]
-        (is (html-response? refresh-response))
-        (is (oob-response-for? refresh-response
-                               views/request-toolbar-dom-id))
-        (is (oob-response-for? refresh-response
-                               views/request-list-dom-id))
-        (is (oob-response-for? refresh-response
-                               views/board-state-form-id))
+        (assert-fragment-or-oob-response refresh-response)
+        (assert-oob refresh-response views/request-toolbar-dom-id)
+        (assert-oob refresh-response views/request-list-dom-id)
+        (assert-oob refresh-response views/board-state-form-id)
         (is (body-contains?
              refresh-response
              (str "name=\"visible-revision\" value=\""
@@ -412,7 +685,7 @@
     (let [ctx (base-ctx)
           old-revision (data/latest-revision ctx)
           title "Need help finding a blue snow shovel"]
-      (create-request-through-app!
+      (create-request-through-route!
        ctx
        (create-params
         {"title" title
@@ -427,11 +700,18 @@
             fresh-matching (data/board-data
                             ctx
                             {:search "blue shovel nora"
-                             :visible-revision (data/latest-revision ctx)})]
+                             :visible-revision (data/latest-revision ctx)})
+            refresh-response (refresh-through-route!
+                              ctx
+                              {"q" "blue shovel nora"
+                               "visible-revision" (str old-revision)})]
         (is (not (contains? (request-titles (:requests stale-matching))
                             title)))
         (is (contains? (request-titles (:requests fresh-matching))
-                       title))))))
+                       title))
+        (assert-fragment-or-oob-response refresh-response)
+        (is (body-contains? refresh-response "blue shovel nora"))
+        (is (body-contains? refresh-response title))))))
 
 (deftest created-request-does-not-jump-other-viewers-list-flow-test
   (testing "a stale request-list fragment does not reveal a newly-created request"
@@ -439,7 +719,7 @@
           helper (helper-ctx)
           visible-before (data/latest-revision helper)
           title "Need help finding lime green twine"]
-      (create-request-through-app!
+      (create-request-through-route!
        owner
        (create-params
         {"title" title
@@ -447,18 +727,22 @@
          "details" "Small spool"
          "customer-name" "Mina"}))
 
-      (let [stale-response (app/request-list-fragment
-                            (ctx-with-params
-                             helper
-                             {"q" ""
-                              "visible-revision" (str visible-before)}))
-            toolbar-response (app/request-toolbar-fragment
-                              (ctx-with-params
-                               helper
-                               {"q" ""
-                                "visible-revision" (str visible-before)}))]
-        (is (html-response? stale-response))
-        (is (html-response? toolbar-response))
+      (let [stale-response (endpoint!
+                            :get
+                            routes/request-list-fragment-route
+                            helper
+                            {:params {"q" ""
+                                      "visible-revision"
+                                      (str visible-before)}})
+            toolbar-response (endpoint!
+                              :get
+                              routes/request-toolbar-fragment-route
+                              helper
+                              {:params {"q" ""
+                                        "visible-revision"
+                                        (str visible-before)}})]
+        (assert-fragment-root stale-response views/request-list-dom-id)
+        (assert-fragment-root toolbar-response views/request-toolbar-dom-id)
         (is (not (body-contains? stale-response title)))
         (is (body-contains? toolbar-response "+1 new"))
         (is (body-contains? toolbar-response
@@ -468,11 +752,11 @@
 ;; Search flow
 ;; -----------------------------------------------------------------------------
 
-(deftest search-flow-test
+(deftest search-data-flow-test
   (testing "search terms match collectively across customer, title, area, and details"
     (let [ctx (base-ctx)
           title "Need help finding a long-handled rake"]
-      (create-request-through-app!
+      (create-request-through-route!
        ctx
        (create-params
         {"title" title
@@ -496,24 +780,46 @@
                              title)))))))
 
 (deftest search-handler-flow-test
-  (testing "search handler renders only the list fragment response"
+  (testing "mounted search route renders only the list fragment response"
     (let [ctx (base-ctx)
-          response (app/search-requests
-                    (ctx-with-params
-                     ctx
-                     {"q" "garden"
-                      "visible-revision"
-                      (str (data/latest-revision ctx))}))]
-      (is (html-response? response))
-      (is (body-contains? response views/request-list-dom-id))
+          response (endpoint!
+                    :get
+                    routes/search-requests-route
+                    ctx
+                    {:params {"q" "garden"
+                              "visible-revision"
+                              (str (data/latest-revision ctx))}})]
+      (assert-fragment-root response views/request-list-dom-id)
       (is (not (body-contains? response views/request-toolbar-dom-id))))))
+
+(deftest search-handler-repeated-param-flow-test
+  (testing "mounted search route uses the final q value when params repeat"
+    (let [ctx (base-ctx)
+          title "Need help finding black pipe insulation"]
+      (create-request-through-route!
+       ctx
+       (create-params
+        {"title" title
+         "area" "Plumbing"
+         "details" "Black foam"
+         "customer-name" "Mina"}))
+
+      (let [response (endpoint!
+                      :get
+                      routes/search-requests-route
+                      ctx
+                      {:params {"q" ["not-present" "black pipe mina"]
+                                "visible-revision"
+                                (str (data/latest-revision ctx))}})]
+        (assert-fragment-root response views/request-list-dom-id)
+        (is (body-contains? response title))))))
 
 (deftest search-handler-respects-visible-revision-flow-test
   (testing "search does not bypass stale visible revision filtering"
     (let [ctx (base-ctx)
           visible-before (data/latest-revision ctx)
           title "Need help locating chartreuse grout"]
-      (create-request-through-app!
+      (create-request-through-route!
        ctx
        (create-params
         {"title" title
@@ -521,19 +827,22 @@
          "details" "Chartreuse only"
          "customer-name" "Mina"}))
 
-      (let [stale-response (app/search-requests
-                            (ctx-with-params
-                             ctx
-                             {"q" "chartreuse grout mina"
-                              "visible-revision" (str visible-before)}))
-            fresh-response (app/search-requests
-                            (ctx-with-params
-                             ctx
-                             {"q" "chartreuse grout mina"
-                              "visible-revision"
-                              (str (data/latest-revision ctx))}))]
-        (is (html-response? stale-response))
-        (is (html-response? fresh-response))
+      (let [stale-response (endpoint!
+                            :get
+                            routes/search-requests-route
+                            ctx
+                            {:params {"q" "chartreuse grout mina"
+                                      "visible-revision"
+                                      (str visible-before)}})
+            fresh-response (endpoint!
+                            :get
+                            routes/search-requests-route
+                            ctx
+                            {:params {"q" "chartreuse grout mina"
+                                      "visible-revision"
+                                      (str (data/latest-revision ctx))}})]
+        (assert-fragment-root stale-response views/request-list-dom-id)
+        (assert-fragment-root fresh-response views/request-list-dom-id)
         (is (not (body-contains? stale-response title)))
         (is (body-contains? fresh-response title))))))
 
@@ -542,25 +851,26 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest select-request-flow-test
-  (testing "select handler expands a visible card by setting selected request id"
+  (testing "mounted select route updates selected hidden board state and returns list + board-state OOB"
     (let [ctx (base-ctx)
           request (first (data/all-requests ctx))
-          ctx' (-> ctx
-                   (ctx-with-request-id (:request/id request))
-                   (assoc :params {"selected" (:request/id request)
-                                   "visible-revision"
-                                   (str (data/latest-revision ctx))}))
-          response (app/select-request ctx')]
-      (is (html-response? response))
+          request-id (:request/id request)
+          response (endpoint!
+                    :get
+                    routes/select-request-route
+                    ctx
+                    {:path-params {:request-id request-id}
+                     :params {"selected" request-id
+                              "visible-revision"
+                              (str (data/latest-revision ctx))}})]
+      (assert-fragment-or-oob-response response)
       (is (body-contains? response views/request-list-dom-id))
       (is (body-contains? response (:request/title request)))
-      (is (or (body-contains? response (:request/details request))
-              (not (model/present? (:request/details request)))))
-      (is (oob-response-for? response views/board-state-form-id))
+      (assert-oob response views/board-state-form-id)
       (is (body-contains?
            response
            (str "name=\"selected\" value=\""
-                (:request/id request)
+                request-id
                 "\""))))))
 
 ;; -----------------------------------------------------------------------------
@@ -568,11 +878,11 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest claim-unclaim-flow-test
-  (testing "helper can claim an open request and then unclaim it"
+  (testing "helper can claim an open request and then unclaim it through mounted routes"
     (let [owner (base-ctx)
           helper (helper-ctx)
           created-title "Need help picking paint brushes"
-          create-result (create-request-through-app!
+          create-result (create-request-through-route!
                          owner
                          (create-params
                           {"title" created-title
@@ -580,43 +890,47 @@
                            "details" "Two inch angled brush"
                            "customer-name" "Pat"}))
           request-id (:request/id (request-by-title owner created-title))]
-      (is (html-response? (:response create-result)))
+      (assert-fragment-or-oob-response (:response create-result))
 
-      (let [claim-result (lifecycle-through-app!
-                          app/claim-request!
+      (let [claim-result (lifecycle-action-through-route!
+                          :claim
                           helper
-                          request-id)]
-        (is (html-response? (:response claim-result)))
+                          request-id)
+            response (:response claim-result)]
+        (assert-fragment-or-oob-response response)
         (is (= :claimed (request-status helper request-id)))
         (is (= "helper" (request-claimer helper request-id)))
+        (is (= "helper@example.com" (request-claimer-email helper request-id)))
         (is (= 1 (count (:notify-calls claim-result))))
-        (is (= :request/claimed
-               (:topic (nth (first (:notify-calls claim-result)) 2))))
-        (is (oob-response-for? (:response claim-result)
-                               views/request-toolbar-dom-id))
-        (is (oob-response-for? (:response claim-result)
-                               views/request-list-dom-id))
-        (is (oob-response-for? (:response claim-result)
-                               views/board-state-form-id)))
+        (is (= :request/claimed (first-change-topic claim-result)))
+        (assert-oob response views/request-toolbar-dom-id)
+        (assert-oob response views/request-list-dom-id)
+        (assert-oob response views/board-state-form-id)
+        (is (body-contains? response "Claim")))
 
-      (let [unclaim-result (lifecycle-through-app!
-                            app/unclaim-request!
+      (let [unclaim-result (lifecycle-action-through-route!
+                            :unclaim
                             helper
-                            request-id)]
-        (is (html-response? (:response unclaim-result)))
+                            request-id)
+            response (:response unclaim-result)]
+        (assert-fragment-or-oob-response response)
         (is (= :open (request-status helper request-id)))
         (is (nil? (request-claimer helper request-id)))
+        (is (nil? (request-claimer-email helper request-id)))
         (is (= 1 (count (:notify-calls unclaim-result))))
-        (is (= :request/unclaimed
-               (:topic (nth (first (:notify-calls unclaim-result)) 2))))))))
+        (is (= :request/unclaimed (first-change-topic unclaim-result)))
+        (assert-oob response views/request-toolbar-dom-id)
+        (assert-oob response views/request-list-dom-id)
+        (assert-oob response views/board-state-form-id)
+        (is (body-contains? response "Unclaim"))))))
 
 (deftest take-over-flow-test
-  (testing "another user can take over a claimed request"
+  (testing "another user can take over a claimed request through mounted routes"
     (let [owner (base-ctx)
           helper (helper-ctx)
           other (other-ctx)
           created-title "Need help loading plywood"
-          _create-result (create-request-through-app!
+          _create-result (create-request-through-route!
                           owner
                           (create-params
                            {"title" created-title
@@ -624,31 +938,36 @@
                             "details" "Three sheets"
                             "customer-name" "Robin"}))
           request-id (:request/id (request-by-title owner created-title))]
-      (let [claim-result (lifecycle-through-app!
-                          app/claim-request!
+      (let [claim-result (lifecycle-action-through-route!
+                          :claim
                           helper
                           request-id)]
-        (is (html-response? (:response claim-result)))
+        (assert-fragment-or-oob-response (:response claim-result))
         (is (= :claimed (request-status helper request-id)))
         (is (= "helper" (request-claimer helper request-id)))
-        (is (= :request/claimed
-               (:topic (nth (first (:notify-calls claim-result)) 2)))))
+        (is (= :request/claimed (first-change-topic claim-result))))
 
-      (let [take-over-result (lifecycle-through-app!
-                              app/take-over-request!
+      (let [take-over-result (lifecycle-action-through-route!
+                              :take-over
                               other
-                              request-id)]
-        (is (html-response? (:response take-over-result)))
+                              request-id)
+            response (:response take-over-result)]
+        (assert-fragment-or-oob-response response)
         (is (= :claimed (request-status other request-id)))
         (is (= "other" (request-claimer other request-id)))
-        (is (= :request/taken-over
-               (:topic (nth (first (:notify-calls take-over-result)) 2))))))))
+        (is (= "other@example.com" (request-claimer-email other request-id)))
+        (is (= 1 (count (:notify-calls take-over-result))))
+        (is (= :request/taken-over (first-change-topic take-over-result)))
+        (assert-oob response views/request-toolbar-dom-id)
+        (assert-oob response views/request-list-dom-id)
+        (assert-oob response views/board-state-form-id)
+        (is (body-contains? response "Take over"))))))
 
 (deftest done-flow-test
-  (testing "owner can mark their own open request done"
+  (testing "owner can mark their own open request done through mounted route"
     (let [ctx (base-ctx)
           created-title "Need help finding caulk"
-          _create-result (create-request-through-app!
+          _create-result (create-request-through-route!
                           ctx
                           (create-params
                            {"title" created-title
@@ -656,20 +975,50 @@
                             "details" "White kitchen caulk"
                             "customer-name" "Dana"}))
           request-id (:request/id (request-by-title ctx created-title))
-          done-result (lifecycle-through-app!
-                       app/mark-request-done!
+          done-result (lifecycle-action-through-route!
+                       :done
                        ctx
-                       request-id)]
-      (is (html-response? (:response done-result)))
+                       request-id)
+          response (:response done-result)]
+      (assert-fragment-or-oob-response response)
       (is (= :done (request-status ctx request-id)))
-      (is (= :request/done
-             (:topic (nth (first (:notify-calls done-result)) 2)))))))
+      (is (= :request/done (first-change-topic done-result)))
+      (assert-oob response views/request-toolbar-dom-id)
+      (assert-oob response views/request-list-dom-id)
+      (assert-oob response views/board-state-form-id)
+      (is (body-contains? response "Done"))
+      (is (contains? (board-titles ctx (latest-view-state ctx))
+                     created-title))
+      (is (body-contains? response created-title))
+      (is (not (terminal-action-url-present? response request-id))))))
+
+(deftest claimed-request-done-flow-test
+  (testing "claimer can mark a claimed request done through mounted route"
+    (let [owner (base-ctx)
+          helper (helper-ctx)
+          created-title "Need help carrying mulch"
+          _create-result (create-request-through-route!
+                          owner
+                          (create-params
+                           {"title" created-title
+                            "area" "Garden"
+                            "details" "Three bags"
+                            "customer-name" "Ira"}))
+          request-id (:request/id (request-by-title owner created-title))]
+      (lifecycle-action-through-route! :claim helper request-id)
+      (let [done-result (lifecycle-action-through-route!
+                         :done
+                         helper
+                         request-id)]
+        (assert-fragment-or-oob-response (:response done-result))
+        (is (= :done (request-status helper request-id)))
+        (is (= :request/done (first-change-topic done-result)))))))
 
 (deftest cancel-flow-test
-  (testing "owner can cancel their own open request"
+  (testing "owner can cancel their own open request through mounted route"
     (let [ctx (base-ctx)
           created-title "Need help finding return desk"
-          _create-result (create-request-through-app!
+          _create-result (create-request-through-route!
                           ctx
                           (create-params
                            {"title" created-title
@@ -677,20 +1026,67 @@
                             "details" "Wrong receipt"
                             "customer-name" "Dana"}))
           request-id (:request/id (request-by-title ctx created-title))
-          cancel-result (lifecycle-through-app!
-                         app/cancel-request!
+          cancel-result (lifecycle-action-through-route!
+                         :cancel
                          ctx
-                         request-id)]
-      (is (html-response? (:response cancel-result)))
+                         request-id)
+          response (:response cancel-result)]
+      (assert-fragment-or-oob-response response)
       (is (= :cancelled (request-status ctx request-id)))
-      (is (= :request/cancelled
-             (:topic (nth (first (:notify-calls cancel-result)) 2)))))))
+      (is (= :request/cancelled (first-change-topic cancel-result)))
+      (assert-oob response views/request-toolbar-dom-id)
+      (assert-oob response views/request-list-dom-id)
+      (assert-oob response views/board-state-form-id)
+      (is (body-contains? response "Cancel"))
+      (is (contains? (board-titles ctx (latest-view-state ctx))
+                     created-title))
+      (is (body-contains? response created-title))
+      (is (not (terminal-action-url-present? response request-id))))))
+
+(deftest lifecycle-action-topic-matrix-flow-test
+  (testing "each successful mounted lifecycle route emits the expected topic"
+    (doseq [action [:claim :unclaim :take-over :done :cancel]]
+      (let [owner (base-ctx)
+            helper (helper-ctx)
+            other (other-ctx)
+            title (str "Matrix request " (name action))
+            _create-result (create-request-through-route!
+                            owner
+                            (create-params
+                             {"title" title
+                              "area" "Matrix"
+                              "details" "Matrix details"
+                              "customer-name" "Casey"}))
+            request-id (:request/id (request-by-title owner title))
+            result (case action
+                     :claim
+                     (lifecycle-action-through-route! :claim helper request-id)
+
+                     :unclaim
+                     (do
+                       (lifecycle-action-through-route! :claim helper request-id)
+                       (lifecycle-action-through-route! :unclaim helper request-id))
+
+                     :take-over
+                     (do
+                       (lifecycle-action-through-route! :claim helper request-id)
+                       (lifecycle-action-through-route! :take-over other request-id))
+
+                     :done
+                     (lifecycle-action-through-route! :done owner request-id)
+
+                     :cancel
+                     (lifecycle-action-through-route! :cancel owner request-id))]
+        (assert-fragment-or-oob-response (:response result))
+        (is (= (expected-change-topic action)
+               (first-change-topic result))
+            (str "wrong topic for " action))))))
 
 (deftest forbidden-action-flow-test
-  (testing "owner cannot claim their own open request"
+  (testing "owner cannot claim their own open request through mounted route"
     (let [ctx (base-ctx)
           created-title "Need help finding nails"
-          _create-result (create-request-through-app!
+          _create-result (create-request-through-route!
                           ctx
                           (create-params
                            {"title" created-title
@@ -698,24 +1094,54 @@
                             "details" "Finish nails"
                             "customer-name" "Dana"}))
           request-id (:request/id (request-by-title ctx created-title))
-          result (lifecycle-through-app!
-                  app/claim-request!
+          result (lifecycle-action-through-route!
+                  :claim
                   ctx
-                  request-id)]
-      (is (html-response? (:response result)))
+                  request-id)
+          response (:response result)]
+      (assert-fragment-or-oob-response response)
       (is (= :open (request-status ctx request-id)))
       (is (empty? (:notify-calls result)))
-      (is (body-contains? (:response result) "Request not updated")))))
+      (is (body-contains? response "Request not updated"))
+      (assert-not-oob response views/request-toolbar-dom-id)
+      (assert-not-oob response views/request-list-dom-id))))
 
 (deftest missing-request-action-flow-test
   (testing "missing request action returns an error response and does not notify"
-    (let [result (lifecycle-through-app!
-                  app/claim-request!
+    (let [result (lifecycle-action-through-route!
+                  :claim
                   (helper-ctx)
-                  "missing-request")]
-      (is (html-response? (:response result)))
+                  "missing-request")
+          response (:response result)]
+      (assert-fragment-or-oob-response response)
       (is (empty? (:notify-calls result)))
-      (is (body-contains? (:response result) "Request not updated")))))
+      (is (body-contains? response "Request not updated")))))
+
+(deftest terminal-request-action-flow-test
+  (testing "terminal requests cannot be claimed or unclaimed"
+    (let [ctx (base-ctx)
+          helper (helper-ctx)
+          title "Need help with terminal action"
+          _create-result (create-request-through-route!
+                          ctx
+                          (create-params
+                           {"title" title
+                            "area" "Hardware"
+                            "details" "Terminal"
+                            "customer-name" "Dana"}))
+          request-id (:request/id (request-by-title ctx title))]
+      (lifecycle-action-through-route! :done ctx request-id)
+
+      (doseq [action [:claim :unclaim :take-over :cancel]]
+        (let [result (lifecycle-action-through-route!
+                      action
+                      helper
+                      request-id)]
+          (assert-fragment-or-oob-response (:response result))
+          (is (= :done (request-status helper request-id)))
+          (is (empty? (:notify-calls result)))
+          (is (body-contains? (:response result)
+                              "Request not updated")))))))
 
 (deftest lifecycle-auto-refresh-visible-request-flow-test
   (testing "a lifecycle live refresh can update an already-visible request at the old visible revision"
@@ -724,25 +1150,26 @@
           open-request (open-seed-request ctx)
           visible-before (data/latest-revision ctx)
           request-id (:request/id open-request)
-          claim-result (lifecycle-through-app!
-                        app/claim-request!
+          claim-result (lifecycle-action-through-route!
+                        :claim
                         helper
                         request-id)]
-      (is (html-response? (:response claim-result)))
+      (assert-fragment-or-oob-response (:response claim-result))
       (is (= :claimed (request-status helper request-id)))
 
       ;; This mirrors the browser's automatic fragment GET after
       ;; sse:live-update. The visible revision is still the older revision,
       ;; but this request was already visible then, so the refreshed card should
       ;; show the updated lifecycle state.
-      (let [fragment-response (app/request-list-fragment
-                               (assoc helper
-                                      :params {"q" ""
-                                               "selected" request-id
-                                               "visible-revision"
-                                               (str visible-before)}))]
-        (is (html-response? fragment-response))
-        (is (body-contains? fragment-response views/request-list-dom-id))
+      (let [fragment-response (endpoint!
+                               :get
+                               routes/request-list-fragment-route
+                               helper
+                               {:params {"q" ""
+                                         "selected" request-id
+                                         "visible-revision"
+                                         (str visible-before)}})]
+        (assert-fragment-root fragment-response views/request-list-dom-id)
         (is (body-contains? fragment-response (:request/title open-request)))
         (is (body-contains? fragment-response "claimed by helper@example.com"))))))
 
@@ -751,10 +1178,10 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest reset-flow-test
-  (testing "reset removes created requests, resets revision, emits reset change and toast"
+  (testing "mounted reset route removes created requests, resets revision, emits reset change and toast"
     (let [ctx (base-ctx)
           created-title "Temporary reset target"]
-      (create-request-through-app!
+      (create-request-through-route!
        ctx
        (create-params
         {"title" created-title
@@ -767,28 +1194,29 @@
 
       (let [notify-calls (atom [])
             reset-toasts (atom 0)]
-        (with-app-render-stubs
-          (with-redefs [hh-live/notify! (notify-recorder notify-calls)
-                        app/send-reset-toast-safely!
-                        (reset-toast-recorder reset-toasts)]
-            (let [response (app/reset-demo! ctx)]
-              (is (html-response? response))
-              (is (= 3 (data/latest-revision ctx)))
-              (is (nil? (request-by-title ctx created-title)))
-              (is (= 1 @reset-toasts))
-              (is (= 1 (count @notify-calls)))
+        (with-reset-side-effect-recorders notify-calls reset-toasts
+          (let [response (endpoint!
+                          :post
+                          routes/reset-demo-route
+                          ctx)]
+            (assert-fragment-or-oob-response response)
+            (is (= 3 (data/latest-revision ctx)))
+            (is (nil? (request-by-title ctx created-title)))
+            (is (= 1 @reset-toasts))
+            (is (= 1 (count @notify-calls)))
 
-              (let [[live-system ctx' change] (first @notify-calls)]
-                (is (= ::live-system live-system))
-                (is (= ctx ctx'))
-                (is (= :humanhelp-demo/reset (:topic change)))
-                (is (= model/store-id (:id change)))
-                (is (= model/store-id (:store/id change)))
-                (is (= 3 (:revision change))))
+            (let [[live-system ctx' change] (first @notify-calls)]
+              (is (= ::live-system live-system))
+              (is (= ctx ctx'))
+              (is (= :humanhelp-demo/reset (:topic change)))
+              (is (= model/store-id (:id change)))
+              (is (= model/store-id (:store/id change)))
+              (is (= 3 (:revision change))))
 
-              (is (oob-response-for? response views/request-toolbar-dom-id))
-              (is (oob-response-for? response views/request-list-dom-id))
-              (is (oob-response-for? response views/board-state-form-id)))))))))
+            (assert-oob response views/request-toolbar-dom-id)
+            (assert-oob response views/request-list-dom-id)
+            (assert-oob response views/board-state-form-id)
+            (is (body-contains? response "Demo reset"))))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Route/view/live wiring flow
@@ -828,10 +1256,8 @@
                                  :user/email "owner@example.com"}
                           :view-state {:search ""
                                        :visible-revision latest}})]
-      (is (html-response? toolbar-response))
-      (is (html-response? list-response))
-      (is (body-contains? toolbar-response views/request-toolbar-dom-id))
-      (is (body-contains? list-response views/request-list-dom-id)))))
+      (assert-fragment-root toolbar-response views/request-toolbar-dom-id)
+      (assert-fragment-root list-response views/request-list-dom-id))))
 
 (deftest rendered-fragment-stale-refresh-flow-test
   (testing "live layer renders stale toolbar but keeps list behind old visible revision"
@@ -839,7 +1265,7 @@
           helper (helper-ctx)
           visible-before (data/latest-revision ctx)
           title "Need help finding copper pipe"]
-      (create-request-through-app!
+      (create-request-through-route!
        ctx
        (create-params
         {"title" title
@@ -861,7 +1287,60 @@
                                    :user/email "helper@example.com"}
                             :view-state {:search ""
                                          :visible-revision visible-before}})]
-        (is (html-response? toolbar-response))
-        (is (html-response? list-response))
+        (assert-fragment-root toolbar-response views/request-toolbar-dom-id)
+        (assert-fragment-root list-response views/request-list-dom-id)
         (is (body-contains? toolbar-response "+1 new"))
         (is (not (body-contains? list-response title)))))))
+
+(deftest no-fragment-action-endpoint-returns-full-page-flow-test
+  (testing "fragment and action endpoints never accidentally return the whole page shell"
+    (let [ctx (base-ctx)
+          helper (helper-ctx)
+          title "Need help with full page guard"
+          _create-result (create-request-through-route!
+                          ctx
+                          (create-params
+                           {"title" title
+                            "area" "Testing"
+                            "details" "Guard"
+                            "customer-name" "Guard"}))
+          request-id (:request/id (request-by-title ctx title))
+          responses [(endpoint!
+                      :get
+                      routes/request-toolbar-fragment-route
+                      ctx
+                      {:params {"visible-revision"
+                                (str (data/latest-revision ctx))}})
+
+                     (endpoint!
+                      :get
+                      routes/request-list-fragment-route
+                      ctx
+                      {:params {"visible-revision"
+                                (str (data/latest-revision ctx))}})
+
+                     (endpoint!
+                      :get
+                      routes/create-request-dialog-fragment-route
+                      ctx)
+
+                     (endpoint!
+                      :get
+                      routes/search-requests-route
+                      ctx
+                      {:params {"q" "guard"
+                                "visible-revision"
+                                (str (data/latest-revision ctx))}})
+
+                     (refresh-through-route!
+                      ctx
+                      {"visible-revision"
+                       (str (data/latest-revision ctx))})
+
+                     (:response
+                      (lifecycle-action-through-route!
+                       :claim
+                       helper
+                       request-id))]]
+      (doseq [response responses]
+        (assert-fragment-or-oob-response response)))))

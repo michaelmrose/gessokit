@@ -349,11 +349,14 @@
    {:request/id (:request/id request)
     :request/number (:request/number request)
     :request/status (:request/status request)
+    :request/customer-user-id (:request/customer-user-id request)
+    :request/claimed-by (:request/claimed-by request)
+    :request/claimed-by-email (:request/claimed-by-email request)
     :previous/status (:request/status previous)
     :action action
     :revision revision
-    :actor/id (:user/id actor)
-    :actor/email (:user/email actor)}))
+    :actor {:user/id (:user/id actor)
+            :user/email (:user/email actor)}}))
 
 (defn minute-tick-change
   []

@@ -199,6 +199,18 @@
    :visible-revision (model/parse-visible-revision
                       (param ctx :visible-revision))})
 
+(defn create-request-input
+  "Extract create-request form input from request params.
+
+   This deliberately uses the HTTP-boundary param helper so repeated browser
+   params are normalized before reaching the model parser."
+  [ctx]
+  (model/parse-create-request-input
+   {:title (param ctx :title)
+    :area (param ctx :area)
+    :details (param ctx :details)
+    :customer-name (param ctx :customer-name)}))
+
 (defn html
   [node]
   (g/html-response node))
@@ -262,6 +274,8 @@
    - hx-include
 
    The inner node owns the fragment DOM id and is the replaceable target.
+
+   SSE is used as a wake-up signal. The SSE payload is not swapped directly.
 
    Do not bake q/selected/visible-revision into hx-get. The current
    #humanhelp-board-state form is the source of truth for fragment fetches."
@@ -456,7 +470,7 @@
   [ctx]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
-        input      (model/parse-create-request-input (:params ctx))
+        input      (create-request-input ctx)
         errors     (model/create-request-errors input)]
     (if (seq errors)
       (html
