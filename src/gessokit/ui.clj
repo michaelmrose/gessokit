@@ -111,7 +111,7 @@
                 (:data-density ctx)
                 (:density default-theme))
    :typography (or (:typography ctx)
-                   (:data-typography default-theme)
+                   (:data-typography ctx)
                    (:typography default-theme))
    :shape (or (:shape ctx)
               (:data-shape ctx)
@@ -139,6 +139,13 @@
   [id-prefix axis]
   (str id-prefix "-" (name axis)))
 
+(defn- control-style
+  []
+  {:border-style "solid"
+   :border-color "var(--border)"
+   :background "var(--background)"
+   :color "var(--foreground)"})
+
 (defn- theme-select
   [{:keys [axis attr label description options selected id-prefix]}]
   (let [id (theme-select-id id-prefix axis)]
@@ -154,10 +161,7 @@
       {:id id
        :name (name axis)
        :class "control-theme radius-md border-theme font-body text-sm-theme"
-       :style {:border-style "solid"
-               :border-color "var(--border)"
-               :background "var(--background)"
-               :color "var(--foreground)"}
+       :style (control-style)
        :onchange (str "document.documentElement.setAttribute('"
                       attr
                       "', this.value)")}
@@ -178,10 +182,7 @@
     {:id (str id-prefix "-mode")
      :name "mode"
      :class "control-theme radius-md border-theme font-body text-sm-theme"
-     :style {:border-style "solid"
-             :border-color "var(--border)"
-             :background "var(--background)"
-             :color "var(--foreground)"}
+     :style (control-style)
      :onchange
      "var root = document.documentElement;
       root.setAttribute('data-color-theme-mode', this.value);
@@ -208,17 +209,14 @@
 (defn theme-dialog
   "Render a theme button plus modal dialog.
 
-   Intended placement: the center area of the Human Help app bar.
-
-   This keeps theme discovery in gessokit.ui, while app-specific navigation and
-   bar layout stay in the app/view namespaces.
+   Intended placement: the standard page-shell bar.
 
    Options:
      :trigger-label?
        Whether the trigger button includes the text label \"Theme\".
 
      :id
-       Dialog id. Defaults to \"gessokit-theme-dialog\".
+       Dialog root id. Defaults to \"gessokit-theme-dialog\".
 
      :id-prefix
        Prefix for internal select ids. Defaults to :id."
@@ -230,63 +228,193 @@
          id-prefix'    (or id-prefix dialog-id)
          state         (theme-state ctx)
          theme-options (discovered-theme-options)]
-     [:<>
-      [:button
-       {:type "button"
-        :class "inline-flex items-center justify-center gap-inline control-theme radius-md border-theme font-body text-sm-theme weight-medium-theme"
-        :style {:border-style "solid"
-                :border-color "var(--border)"
-                :background "var(--card)"
-                :color "var(--card-foreground)"}
-        :aria-label "Theme settings"
-        :onclick (str "document.getElementById('"
-                      dialog-id
-                      "').showModal()")}
+     (g/dialog
+      {:attrs {:id dialog-id}}
+
+      (g/dialog-trigger
+       {:attrs {:aria-label "Theme settings"}}
        (g/icon "palette" {:size :sm})
        (when trigger-label?
-         [:span "Theme"])]
+         [:span "Theme"]))
 
-      [:dialog
-       {:id dialog-id
-        :class "radius-xl border-theme shadow-xl"
-        :style {:border-style "solid"
-                :border-color "var(--border)"
-                :background "var(--card)"
-                :color "var(--card-foreground)"
-                :max-width "min(34rem, calc(100vw - 2rem))"
-                :width "100%"
-                :padding "0"}}
-       [:div {:class "pad-card content-stack-theme"}
-        [:div {:class "title-stack-theme"}
-         [:h2 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-bold-theme"}
-          "Theme"]
+      (g/dialog-overlay)
 
-         [:p {:class "font-body text-sm-theme leading-body"
-              :style {:color "var(--muted-foreground)"}}
-          "Explore the generated Gesso theme dimensions. Changes apply to this page immediately."]]
+      (g/dialog-content
+       {:title "Theme"
+        :description "Explore the generated Gesso theme dimensions. Changes apply to this page immediately."
+        :body
+        [[:div {:class "form-theme"}
+          (for [{:keys [axis attr label description] :as spec} axis-specs]
+            (theme-select
+             (assoc spec
+                    :axis axis
+                    :attr attr
+                    :label label
+                    :description description
+                    :id-prefix id-prefix'
+                    :options (get theme-options axis)
+                    :selected (get state axis))))
 
-        [:div {:class "form-theme"}
-         (for [{:keys [axis attr label description] :as spec} axis-specs]
-           (theme-select
-            (assoc spec
-                   :axis axis
-                   :attr attr
-                   :label label
-                   :description description
-                   :id-prefix id-prefix'
-                   :options (get theme-options axis)
-                   :selected (get state axis))))
+          (mode-select
+           {:selected (:mode state)
+            :id-prefix id-prefix'})]]
+        :footer
+        [(g/dialog-close {:text "Done"})]})))))
 
-         (mode-select
-          {:selected (:mode state)
-           :id-prefix id-prefix'})]
+;; -----------------------------------------------------------------------------
+;; Standard bar pieces
+;; -----------------------------------------------------------------------------
 
-        [:div {:class "cluster-theme justify-end"}
-         [:form {:method "dialog"}
-          (g/button
-           {:variant :outline
-            :text "Done"
-            :attrs {:type "submit"}})]]]]])))
+(defn user-email
+  [user]
+  (or (:user/email user)
+      (:user/id user)
+      "demo-user"))
+
+(defn brand
+  "Render the brand node used by the standard page-shell bar.
+
+   Options:
+     :href
+     :image-src
+     :text
+     :alt"
+  ([] (brand {}))
+  ([{:keys [href image-src text alt]
+     :or {href "/app"
+          image-src "/img/hh.png"
+          text settings/app-name
+          alt ""}}]
+   [:a {:href href
+        :class "cluster-theme items-center"
+        :style {:color "var(--foreground)"
+                :text-decoration "none"}}
+    [:img (cond-> {:src image-src
+                   :alt alt
+                   :style {:width "1.5rem"
+                           :height "1.5rem"
+                           :object-fit "contain"
+                           :display "block"}}
+            (not (seq alt))
+            (assoc :aria-hidden "true"))]
+    [:span {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme"}
+     text]]))
+
+(defn logout-form
+  []
+  [:form {:method "post"
+          :action "/auth/signout"}
+   (g/button
+    {:variant :ghost
+     :text "Log out"
+     :class "w-full justify-start"
+     :attrs {:type "submit"}})])
+
+(defn user-menu
+  [user]
+  (let [email (user-email user)]
+    [:details {:class "relative"}
+     [:summary {:class "inline-flex items-center justify-center control-theme border-theme radius-md cursor-pointer"
+                :aria-label "Account"
+                :title email
+                :style {:width "3rem"
+                        :height "3rem"
+                        :list-style "none"}}
+      (g/icon "circle-user-round"
+              {:size :2xl
+               :title "Account"
+               :attrs {:stroke-width 1.5}})]
+
+     [:div {:class "absolute right-0 mt-2 min-w-56 radius-lg border-theme shadow-lg"
+            :style {:background "var(--popover)"
+                    :color "var(--popover-foreground)"
+                    :z-index 50
+                    :overflow "hidden"}}
+      [:div {:class "stack-sm-theme p-3"}
+       [:p {:class "text-xs-theme"
+            :style {:color "var(--muted-foreground)"}}
+        "Signed in as"]
+       [:p {:class "text-sm-theme weight-medium-theme"
+            :style {:max-width "16rem"
+                    :overflow "hidden"
+                    :text-overflow "ellipsis"
+                    :white-space "nowrap"}}
+        email]]
+      (logout-form)]]))
+
+(def page-shell-option-keys
+  #{:user
+    :brand
+    :rightmost
+    :main-attrs
+    :main-class
+    :shell-attrs
+    :shell-class
+    :toaster
+    :toaster?})
+
+(defn- page-shell-options?
+  [x]
+  (and (map? x)
+       (boolean
+        (some #(contains? x %)
+              page-shell-option-keys))))
+
+(defn- normalize-page-shell-args
+  [body]
+  (if (page-shell-options? (first body))
+    [(first body) (rest body)]
+    [{} body]))
+
+(defn- page-shell-main
+  [{:keys [main-attrs main-class]
+    :or {main-class "flex-grow"}}
+   body]
+  (into [:main (merge {:class main-class}
+                      main-attrs)]
+        body))
+
+(defn- page-shell-toaster
+  [{:keys [toaster toaster?]}]
+  (cond
+    (= false toaster?)
+    nil
+
+    toaster
+    toaster
+
+    :else
+    (g/toaster {:id "app-toaster"
+                :position :bottom-right})))
+
+(defn- page-shell-bar
+  [ctx opts]
+  (let [user               (:user opts)
+        supplied-brand     (:brand opts)
+        supplied-rightmost (:rightmost opts)
+        brand-node         (or supplied-brand
+                               (brand))
+        rightmost-node     (or supplied-rightmost
+                               [[:div {:class "cluster-theme items-center justify-end"}
+                                 (theme-dialog ctx {:trigger-label? false})
+                                 (user-menu user)]])]
+    (g/bars
+     {:topbar-only? true
+      :brand brand-node
+      :rightmost rightmost-node})))
+
+#_(defn- page-shell-bar
+  [ctx {:keys [user brand rightmost]}]
+  (let [brand-node (or brand (brand))
+        rightmost-node
+        (or rightmost
+            [[:div {:class "cluster-theme items-center justify-end"}
+              (theme-dialog ctx {:trigger-label? false})
+              (user-menu user)]])]
+    (g/bars
+     {:topbar-only? true
+      :brand brand-node
+      :rightmost rightmost-node})))
 
 ;; -----------------------------------------------------------------------------
 ;; Base page shell
@@ -351,9 +479,8 @@
 (defn page
   "Centered standard page shell.
 
-   This does not render the old always-visible theme testing bar. App pages that
-   want theme controls should place (theme-dialog ctx) where it belongs,
-   usually in the app bar."
+   This shell does not render the standard app bar. Use page-shell for app
+   pages that should include the always-present bar."
   [ctx & body]
   (base ctx
         [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
@@ -364,18 +491,66 @@
                      :position :bottom-right})]))
 
 (defn page-shell
-  "Full-width app shell.
+  "Full-width app shell with the standard Gesso bars topbar.
 
-   Use this for application layouts that render their own bars, page grids, and
-   content surfaces."
+   Existing body-only usage still works:
+
+     (page-shell ctx body...)
+
+   App pages should pass the current user:
+
+     (page-shell
+      ctx
+      {:user user}
+      body...)
+
+   The bar is rendered directly through g/bars. App-specific view namespaces
+   should not hand-write data-bars markup.
+
+   Supported opts:
+     :user
+       Current user for the user menu.
+
+     :brand
+       Optional brand node. Defaults to ui/brand.
+
+     :rightmost
+       Optional rightmost bar segment content. Defaults to theme dialog plus
+       user menu.
+
+     :main-class
+       Class for the generated main element. Defaults to \"flex-grow\".
+
+     :main-attrs
+       Additional attrs for the generated main element.
+
+     :shell-class
+       Class for the outer shell div.
+
+     :shell-attrs
+       Additional attrs for the outer shell div.
+
+     :toaster
+       Custom toaster node.
+
+     :toaster?
+       Set false to omit the default toaster."
   [ctx & body]
-  (base ctx
-        [:div {:class "min-h-screen flex flex-col bg-background text-foreground"}
-         (into [:main {:class "flex-grow"}]
-               body)
-
-         (g/toaster {:id "app-toaster"
-                     :position :bottom-right})]))
+  (let [[opts body] (normalize-page-shell-args body)
+        shell-attrs (merge
+                     {:class (or (:shell-class opts)
+                                 "min-h-screen flex flex-col bg-background text-foreground")}
+                     (:shell-attrs opts))
+        topbar      (page-shell-bar ctx opts)
+        main        (page-shell-main opts body)
+        toaster     (page-shell-toaster opts)]
+    (base ctx
+          (into [:div shell-attrs]
+                (concat
+                 [topbar
+                  main]
+                 (when toaster
+                   [toaster]))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Errors
