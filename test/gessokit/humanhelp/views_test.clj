@@ -298,20 +298,15 @@
               (filter node? (hiccup-seq node))))))
 
 (deftest page-test
-  (testing "page composes page shell, listener, bar, panels, search, and dialog"
+  (testing "page composes page shell, listener, panels, search, and dialog"
     (with-redefs [ui/page-shell
-                  (fn [page-ctx & body]
-                    (into [:page-shell {:ctx page-ctx}] body))
+                  (fn [ctx & body]
+                    (into [:page-shell {:ctx ctx}] body))
 
                   client-plumbing/listener
-                  (fn [listener-ctx]
+                  (fn [ctx]
                     [:listener {:id "client-listener"
-                                :ctx listener-ctx}])
-
-                  ui/theme-dialog
-                  (fn [theme-ctx opts]
-                    [:theme-dialog {:ctx theme-ctx
-                                    :opts opts}])]
+                                :ctx ctx}])]
       (let [toolbar [:div {:id views/request-toolbar-dom-id} "toolbar panel"]
             request-list [:div {:id views/request-list-dom-id} "list panel"]
             node (views/page
@@ -321,15 +316,18 @@
                    :request-toolbar-panel toolbar
                    :request-list-panel request-list})]
         (is (= :page-shell (first node)))
+        (is (= {:ctx ctx} (second node)))
+        (is (= {:user owner} (nth node 2)))
+
         (is (find-by-id node "client-listener"))
         (is (find-by-id node views/request-toolbar-dom-id))
         (is (find-by-id node views/request-list-dom-id))
         (is (find-by-id node views/create-request-dialog-id))
         (is (find-by-id node views/board-state-form-id))
+
         (is (contains-text? node "Welcome to Human Help."))
         (is (contains-text? node "toolbar panel"))
-        (is (contains-text? node "list panel"))
-        (is (contains-text? node "owner@example.com"))))))
+        (is (contains-text? node "list panel"))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request toolbar

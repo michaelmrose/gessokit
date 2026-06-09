@@ -79,9 +79,8 @@
 (defn discovered-theme-options
   "Discover available theme axis values from bundled/app-generated CSS.
 
-   This preserves the useful behavior from the old theme testing bar: when new
-   app themes are generated into public/gesso/app-themes.css, they appear in the
-   UI without hand-editing Clojure."
+   When app themes are generated into public/gesso/app-themes.css, they appear
+   in the UI without hand-editing Clojure."
   []
   (let [css-blobs (map slurp (theme-css-resources))]
     (reduce
@@ -265,12 +264,6 @@
 ;; Standard bar pieces
 ;; -----------------------------------------------------------------------------
 
-(defn user-email
-  [user]
-  (or (:user/email user)
-      (:user/id user)
-      "demo-user"))
-
 (defn brand
   "Render the brand node used by the standard page-shell bar.
 
@@ -300,6 +293,15 @@
     [:span {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme"}
      text]]))
 
+(defn- account-email
+  [user]
+  (:user/email user))
+
+(defn- account-label
+  [user]
+  (or (account-email user)
+      "Not signed in"))
+
 (defn logout-form
   []
   [:form {:method "post"
@@ -312,35 +314,48 @@
 
 (defn user-menu
   [user]
-  (let [email (user-email user)]
-    [:details {:class "relative"}
-     [:summary {:class "inline-flex items-center justify-center control-theme border-theme radius-md cursor-pointer"
-                :aria-label "Account"
-                :title email
-                :style {:width "3rem"
-                        :height "3rem"
-                        :list-style "none"}}
+  (let [email      (account-email user)
+        label      (account-label user)
+        signed-in? (some? email)]
+    (g/dropdown-menu
+     {}
+     (g/dropdown-menu-trigger
+      {:class "inline-flex items-center justify-center control-theme radius-md"
+       :attrs {:aria-label "Account"
+               :title label
+               :style {:width "3rem"
+                       :height "3rem"}}}
       (g/icon "circle-user-round"
               {:size :2xl
                :title "Account"
-               :attrs {:stroke-width 1.5}})]
+               :attrs {:stroke-width 1.5}}))
 
-     [:div {:class "absolute right-0 mt-2 min-w-56 radius-lg border-theme shadow-lg"
-            :style {:background "var(--popover)"
-                    :color "var(--popover-foreground)"
-                    :z-index 50
-                    :overflow "hidden"}}
-      [:div {:class "stack-sm-theme p-3"}
-       [:p {:class "text-xs-theme"
-            :style {:color "var(--muted-foreground)"}}
-        "Signed in as"]
-       [:p {:class "text-sm-theme weight-medium-theme"
-            :style {:max-width "16rem"
-                    :overflow "hidden"
-                    :text-overflow "ellipsis"
-                    :white-space "nowrap"}}
-        email]]
-      (logout-form)]]))
+     (g/dropdown-menu-content
+      {:align :end}
+      (g/dropdown-menu-label
+       {}
+       [:div {:class "content-stack-theme gap-field"}
+        [:span (if signed-in?
+                 "Signed in as"
+                 "Account")]
+        [:span {:class "font-body text-sm-theme leading-body weight-medium-theme"
+                :style {:display "block"
+                        :max-width "16rem"
+                        :overflow "hidden"
+                        :text-overflow "ellipsis"
+                        :white-space "nowrap"
+                        :color "var(--foreground)"}}
+         label]])
+
+      (when signed-in?
+        (g/dropdown-menu-separator))
+
+      (when signed-in?
+        (logout-form))))))
+
+;; -----------------------------------------------------------------------------
+;; Page shell options
+;; -----------------------------------------------------------------------------
 
 (def page-shell-option-keys
   #{:user
@@ -387,34 +402,20 @@
     (g/toaster {:id "app-toaster"
                 :position :bottom-right})))
 
+(defn- page-shell-rightmost
+  [ctx opts]
+  (or (:rightmost opts)
+      [[:div {:class "cluster-theme items-center justify-end"}
+        (theme-dialog ctx {:trigger-label? false})
+        (user-menu (:user opts))]]))
+
 (defn- page-shell-bar
   [ctx opts]
-  (let [user               (:user opts)
-        supplied-brand     (:brand opts)
-        supplied-rightmost (:rightmost opts)
-        brand-node         (or supplied-brand
-                               (brand))
-        rightmost-node     (or supplied-rightmost
-                               [[:div {:class "cluster-theme items-center justify-end"}
-                                 (theme-dialog ctx {:trigger-label? false})
-                                 (user-menu user)]])]
-    (g/bars
-     {:topbar-only? true
-      :brand brand-node
-      :rightmost rightmost-node})))
-
-#_(defn- page-shell-bar
-  [ctx {:keys [user brand rightmost]}]
-  (let [brand-node (or brand (brand))
-        rightmost-node
-        (or rightmost
-            [[:div {:class "cluster-theme items-center justify-end"}
-              (theme-dialog ctx {:trigger-label? false})
-              (user-menu user)]])]
-    (g/bars
-     {:topbar-only? true
-      :brand brand-node
-      :rightmost rightmost-node})))
+  (g/bars
+   {:topbar-only? true
+    :brand (or (:brand opts)
+               (brand))
+    :rightmost (page-shell-rightmost ctx opts)}))
 
 ;; -----------------------------------------------------------------------------
 ;; Base page shell
@@ -509,14 +510,14 @@
 
    Supported opts:
      :user
-       Current user for the user menu.
+       Current user for the account menu.
 
      :brand
        Optional brand node. Defaults to ui/brand.
 
      :rightmost
        Optional rightmost bar segment content. Defaults to theme dialog plus
-       user menu.
+       account menu.
 
      :main-class
        Class for the generated main element. Defaults to \"flex-grow\".

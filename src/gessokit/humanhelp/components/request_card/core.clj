@@ -72,31 +72,30 @@
                :default)
     :view-state view-state}))
 
-(defn card-selected?
+(defn card-open?
   [request view-state]
   (= (:request/id request)
      (:selected-request-id view-state)))
-
-(defn selection-url
-  [request selected? view-state]
-  (if selected?
-    (routes/clear-selection-url view-state)
-    (routes/select-request-url (:request/id request) view-state)))
 
 (defn request-meta
   [request]
   [:div (attr/meta-attrs)
    (request-status-pill request)
 
-   [:span (attr/meta-text-attrs)
-    (:request/area request)]
+   (g/muted-text
+    {:as :span
+     :class "text-xs-theme"
+     :text (:request/area request)})
 
-   [:span (attr/meta-text-attrs)
-    "·"]
+   (g/muted-text
+    {:as :span
+     :class "text-xs-theme"
+     :text "·"})
 
-   [:span (attr/meta-text-attrs)
-    "waiting "
-    (model/waiting-label request)]])
+   (g/muted-text
+    {:as :span
+     :class "text-xs-theme"
+     :text (str "waiting " (model/waiting-label request))})])
 
 (defn request-card-actions
   [ctx request user view-state]
@@ -107,43 +106,52 @@
        (map #(action-button ctx request % view-state))
        actions))))
 
-(defn- require-request-list-dom-id
-  [request-list-dom-id]
-  (or request-list-dom-id
-      (throw
-       (ex-info "request-card requires :request-list-dom-id"
-                {}))))
+(defn request-summary
+  [request open?]
+  [:summary (attr/summary-attrs)
+   [:div (attr/header-stack-attrs)
+    [:h3 (attr/title-attrs)
+     (:request/title request)]
+
+    (request-meta request)
+
+    [:div (attr/customer-row-attrs)
+     (g/text
+      {:as :span
+       :variant :small
+       :class "weight-medium-theme"
+       :text (:request/customer-name request)})
+
+     (when-let [claimed-by (:request/claimed-by-email request)]
+       (g/muted-text
+        {:as :span
+         :class "text-xs-theme leading-body"
+         :text (str "claimed by " claimed-by)}))]]
+
+   (g/icon "chevron-down"
+           {:size :sm
+            :class "shrink-0 transition-transform duration-200 ease-in-out"
+            :attrs (attr/chevron-attrs open?)})])
+
+(defn request-content
+  [ctx request user view-state]
+  (g/accordion-content
+   {:class (attr/details-stack-class)}
+   (when (model/present? (:request/details request))
+     (g/text
+      {:as :p
+       :variant :small
+       :text (:request/details request)}))
+   (request-card-actions ctx request user view-state)))
 
 (defn request-card
-  [ctx {:keys [request user view-state request-list-dom-id]}]
-  (let [view-state          (or view-state {})
-        request-list-dom-id (require-request-list-dom-id request-list-dom-id)
-        selected?           (card-selected? request view-state)
-        href                (selection-url request selected? view-state)]
-    [:article (attr/card-attrs request selected?)
-     [:a (attr/selection-link-attrs
-          {:href href
-           :request-list-dom-id request-list-dom-id})
-      [:div (attr/header-row-attrs)
-       [:div (attr/title-stack-attrs)
-        [:h3 (attr/title-attrs)
-         (:request/title request)]
-        (request-meta request)]
-       (g/icon (if selected? "chevron-up" "chevron-down")
-               {:size :sm})]
-
-      [:div (attr/customer-row-attrs)
-       [:span (attr/customer-name-attrs)
-        (:request/customer-name request)]
-
-       (when-let [claimed-by (:request/claimed-by-email request)]
-         [:span (attr/claimed-by-attrs)
-          (str "claimed by " claimed-by)])]]
-
-     (when selected?
-       [:div (attr/details-stack-attrs)
-        (when (model/present? (:request/details request))
-          [:p (attr/details-text-attrs)
-           (:request/details request)])
-
-        (request-card-actions ctx request user view-state)])]))
+  [ctx {:keys [request user view-state]}]
+  (let [view-state (or view-state {})
+        open?      (card-open? request view-state)]
+    (g/accordion-item
+     {:value (:request/id request)
+      :open? open?
+      :class (attr/item-class)
+      :attrs (attr/item-attrs request open?)}
+     (request-summary request open?)
+     (request-content ctx request user view-state))))

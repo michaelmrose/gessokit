@@ -508,6 +508,8 @@
     (is (vector? node))
     (is (find-by-id node views/request-toolbar-dom-id))
     (is (find-by-id node views/request-list-dom-id))
+    (is (find-by-id node views/board-state-form-id))
+    (is (find-by-id node "app-toaster"))
     (is (contains-text? node "Human Help"))))
 
 (deftest request-toolbar-fragment-test

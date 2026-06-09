@@ -1,74 +1,62 @@
 (ns gessokit.humanhelp.components.request-card.attr)
 
 (defn card-style
-  [selected?]
+  [open?]
   {:border-style "solid"
-   :border-color (if selected?
+   :border-color (if open?
                    "var(--primary)"
                    "var(--border)")
    :background "var(--background)"
    :color "var(--foreground)"
-   :box-shadow (when selected?
+   :box-shadow (when open?
                  "0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent)")})
 
-(defn card-attrs
-  [request selected?]
+(defn item-class
+  []
+  "radius-xl border-theme transition-all")
+
+(defn item-attrs
+  [request open?]
   {:id (str "humanhelp-request-" (:request/id request))
    :data-humanhelp-request-card true
-   :class "radius-xl border-theme pad-card content-stack-theme transition-all"
-   :style (card-style selected?)})
+   :style (card-style open?)})
 
-(defn selection-link-attrs
-  [{:keys [href request-list-dom-id]}]
-  {:href href
-   :hx-get href
-   :hx-target (str "#" request-list-dom-id)
-   :hx-swap "outerHTML"
-   :class "block content-stack-theme"
-   :style {:color "inherit"
-           :text-decoration "none"}})
-
-(defn header-row-attrs
+(defn summary-attrs
   []
-  {:class "cluster-theme items-start justify-between"})
+  {:class "cursor-pointer w-full list-none pad-row flex items-start justify-between gap-inline outline-none"
+   :data-humanhelp-request-summary true
+   :style {:background "var(--secondary)"
+           :color "var(--primary)"
+           :font-weight 600
+           :box-shadow "inset 0 -1px 0 0 color-mix(in srgb, var(--foreground) 16%, transparent)"}})
 
-(defn title-stack-attrs
+(defn header-stack-attrs
   []
-  {:class "content-stack-theme gap-field"})
+  {:class "content-stack-theme gap-field min-w-0"})
 
 (defn title-attrs
   []
-  {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"})
+  {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme min-w-0"})
 
 (defn meta-attrs
   []
   {:class "cluster-theme items-center"})
 
-(defn meta-text-attrs
-  []
-  {:class "font-body text-xs-theme"
-   :style {:color "var(--muted-foreground)"}})
-
 (defn customer-row-attrs
   []
   {:class "cluster-theme items-center"})
 
-(defn customer-name-attrs
-  []
-  {:class "font-body text-sm-theme leading-body weight-medium-theme"})
+(defn chevron-attrs
+  [open?]
+  {:data-accordion-chevron true
+   :aria-hidden "true"
+   :style {:transform (if open?
+                        "rotate(180deg)"
+                        "rotate(0deg)")}})
 
-(defn claimed-by-attrs
+(defn details-stack-class
   []
-  {:class "font-body text-xs-theme leading-body"
-   :style {:color "var(--muted-foreground)"}})
-
-(defn details-stack-attrs
-  []
-  {:class "content-stack-theme"})
-
-(defn details-text-attrs
-  []
-  {:class "font-body text-sm-theme leading-body"})
+  "content-stack-theme")
 
 (defn actions-attrs
   []

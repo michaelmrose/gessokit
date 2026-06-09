@@ -19,7 +19,7 @@
    [gessokit.ui :as ui]))
 
 ;; -----------------------------------------------------------------------------
-;; DOM ids shared with live.clj
+;; DOM ids shared with app/live
 ;; -----------------------------------------------------------------------------
 
 (def request-toolbar-dom-id
@@ -41,17 +41,16 @@
 ;; Small helpers
 ;; -----------------------------------------------------------------------------
 
-(defn user-email
+(defn account-email
   [user]
-  (or (:user/email user)
-      (:user/id user)
-      "demo-user"))
+  (:user/email user))
 
 (defn muted
   [text]
-  [:p {:class "font-body text-sm-theme leading-body"
-       :style {:color "var(--muted-foreground)"}}
-   text])
+  (g/muted-text
+   {:as :p
+    :class "text-sm-theme leading-body"
+    :text text}))
 
 (defn hidden-input
   [name value]
@@ -88,108 +87,11 @@
   (into [:div {:style {:display "contents"}}]
         (remove nil? nodes)))
 
-(defn attr-style-control
-  []
-  {:border-style "solid"
-   :border-color "var(--border)"
-   :background "var(--background)"
-   :color "var(--foreground)"})
-
 (defn sr-only-label
   [for text]
   [:label {:for for
            :class "sr-only"}
    text])
-
-;; -----------------------------------------------------------------------------
-;; App bar
-;; -----------------------------------------------------------------------------
-
-(defn brand
-  []
-  [:a {:href routes/base-path
-       :class "cluster-theme items-center"
-       :style {:color "var(--foreground)"
-               :text-decoration "none"}}
-   [:img {:src "/img/hh.png"
-          :alt ""
-          :aria-hidden "true"
-          :style {:width "1.5rem"
-                  :height "1.5rem"
-                  :object-fit "contain"
-                  :display "block"}}]
-   [:span {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme"}
-    "Human Help"]])
-
-(defn logout-form
-  []
-  [:form {:method "post"
-          :action "/auth/signout"}
-   [:button {:type "submit"
-             :class "w-full text-left font-body text-sm-theme leading-body"
-             :style {:color "var(--foreground)"
-                     :background "transparent"
-                     :border "0"
-                     :padding "0"}}
-    "Log out"]])
-
-(defn user-menu
-  [user]
-  (let [email (user-email user)]
-    [:details {:class "relative"}
-     [:summary {:class "inline-flex items-center justify-center control-theme border-theme radius-md cursor-pointer"
-                :aria-label "Account"
-                :title email
-                :style {:width "3rem"
-                        :height "3rem"
-                        :list-style "none"}}
-      (g/icon "circle-user-round"
-              {:size :2xl
-               :title "Account"
-               :attrs {:stroke-width 1.5}})]
-
-     [:div {:class "absolute right-0 mt-2 min-w-56 radius-lg border-theme shadow-lg"
-            :style {:background "var(--popover)"
-                    :color "var(--popover-foreground)"
-                    :z-index 50
-                    :overflow "hidden"}}
-      [:div {:class "stack-sm-theme p-3"}
-       [:p {:class "text-xs-theme"
-            :style {:color "var(--muted-foreground)"}}
-        "Signed in as"]
-       [:p {:class "text-sm-theme weight-medium-theme"
-            :style {:max-width "16rem"
-                    :overflow "hidden"
-                    :text-overflow "ellipsis"
-                    :white-space "nowrap"}}
-        email]]
-      (logout-form)]]))
-
-(defn app-bar
-  [ctx user]
-  [:div {:data-bars-root true
-         :data-bars-open "false"
-         :data-bars-has-sidebar "false"
-         :data-bars-sidebar-collapse-at "medium"
-         :data-bars-has-hamburger-md "false"
-         :data-bars-has-hamburger-sm "false"
-         :class "min-w-0"}
-   [:header {:data-bars-topbar true}
-    [:div {:data-bars-brand true
-           :class "min-w-0"}
-     (brand)]
-
-    [:nav {:data-bars-segment "leftmost"
-           :class "min-w-0"}]
-
-    [:nav {:data-bars-segment "center"
-           :class "min-w-0"}]
-
-    [:nav {:data-bars-segment "rightmost"
-           :class "min-w-0"}
-     [:div {:class "cluster-theme items-center justify-end"}
-      (ui/theme-dialog ctx {:trigger-label? false})
-      (user-menu user)]]]])
 
 ;; -----------------------------------------------------------------------------
 ;; Page shell bits
@@ -198,30 +100,13 @@
 (defn hero
   []
   [:div {:class "title-stack-theme text-center"}
-   [:h1 {:class "font-heading leading-heading tracking-heading text-4xl-theme weight-bold-theme"}
-    "Welcome to Human Help."]])
+   (g/page-title
+    {:text "Welcome to Human Help."
+     :class "text-4xl-theme"})])
 
 ;; -----------------------------------------------------------------------------
 ;; Request toolbar
 ;; -----------------------------------------------------------------------------
-
-(defn refresh-button-class
-  [stale?]
-  (str "inline-flex items-center justify-center gap-inline control-theme radius-md border-theme "
-       "font-body text-sm-theme weight-medium-theme "
-       (when stale? "shadow-lg")))
-
-(defn refresh-button-style
-  [stale?]
-  (if stale?
-    {:border-style "solid"
-     :border-color "var(--primary)"
-     :background "var(--primary)"
-     :color "var(--primary-foreground)"}
-    {:border-style "solid"
-     :border-color "var(--border)"
-     :background "var(--card)"
-     :color "var(--card-foreground)"}))
 
 (defn refresh-form
   [ctx view-state stale?]
@@ -233,10 +118,45 @@
           :class "inline-flex"}
    (g/anti-forgery-input ctx)
    (view-state-hidden-inputs view-state)
-   [:button {:type "submit"
-             :class (refresh-button-class stale?)
-             :style (refresh-button-style stale?)}
-    "Refresh"]])
+   (g/button
+    {:variant (if stale? :primary :outline)
+     :text "Refresh"
+     :attrs {:type "submit"}})])
+
+(defn create-request-button
+  []
+  (g/button
+   {:variant :primary
+    :size :icon
+    :text "+"
+    :attrs {:type "button"
+            :aria-label "Create request"
+            :onclick (str "document.getElementById('"
+                          create-request-dialog-id
+                          "').showModal()")}}))
+
+(defn request-toolbar-heading
+  [{:keys [open-count pending-open-count]}]
+  [:div {:class "content-stack-theme gap-field"}
+   (g/section-title
+    {:text "Requests"
+     :class "text-lg-theme weight-semibold-theme"})
+
+   [:div {:class "cluster-theme items-center"}
+    (g/status-pill
+     {:status (if (pos? (or open-count 0)) :active :muted)
+      :dot? true
+      :text "Open"})
+
+    (g/muted-text
+     {:as :span
+      :class "text-sm-theme leading-body"
+      :text (str (or open-count 0) " open")})
+
+    (when (pos? (or pending-open-count 0))
+      (g/badge
+       {:variant :secondary
+        :text (str "+" pending-open-count " new")}))]])
 
 (defn request-toolbar-fragment
   [{:keys [ctx
@@ -251,36 +171,18 @@
            :data-humanhelp-fragment "request-toolbar"
            :data-latest-revision latest-revision
            :class "content-stack-theme"}
-     [:div {:class "toolbar-theme justify-between"}
-      [:div {:class "cluster-theme items-center"}
-       [:div {:class "title-stack-theme gap-field"}
-        [:h2 {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme"}
-         "Requests"]
-        [:div {:class "cluster-theme items-center"}
-         (g/status-pill
-          {:status (if (pos? (or open-count 0)) :active :muted)
-           :dot? true
-           :text "Open"})
+     (g/toolbar
+      {}
+      (g/toolbar-start
+       {}
+       (request-toolbar-heading
+        {:open-count open-count
+         :pending-open-count pending-open-count}))
 
-         [:span {:class "font-body text-sm-theme leading-body"
-                 :style {:color "var(--muted-foreground)"}}
-          (str (or open-count 0) " open")]
-
-         (when (pos? (or pending-open-count 0))
-           (g/badge
-            {:variant :secondary
-             :text (str "+" pending-open-count " new")}))]]]
-
-      [:div {:class "cluster-theme items-center justify-end"}
+      (g/toolbar-end
+       {}
        (refresh-form ctx view-state stale?)
-
-       [:button {:type "button"
-                 :aria-label "Create request"
-                 :class "btn-primary"
-                 :onclick (str "document.getElementById('"
-                               create-request-dialog-id
-                               "').showModal()")}
-        "+"]]]
+       (create-request-button)))
 
      (when stale?
        (muted "New request data is available. Refresh when you are ready."))]))
@@ -309,14 +211,14 @@
               :style {:color "var(--muted-foreground)"}}
        (g/icon "search" {:size :sm})]
 
-      [:input {:type "search"
-               :id "humanhelp-search"
-               :name routes/search-param
-               :value (or (:search view-state) "")
-               :placeholder "Search by person, request, area, or status"
-               :class "control-theme radius-lg border-theme font-body text-base-theme w-full"
-               :style (assoc (attr-style-control)
-                             :padding-left "2.5rem")}]]]))
+      (g/input
+       {:type "search"
+        :id "humanhelp-search"
+        :name routes/search-param
+        :value (or (:search view-state) "")
+        :placeholder "Search by person, request, area, or status"
+        :class "text-base-theme w-full"
+        :attrs {:style {:padding-left "2.5rem"}}})]]))
 
 ;; -----------------------------------------------------------------------------
 ;; Request list
@@ -333,6 +235,24 @@
                    "Create a request with the plus button to start the demo.")
     :icon (g/empty-state-icon)}))
 
+(defn request-accordion
+  [{:keys [ctx user view-state requests]}]
+  (apply
+   g/accordion
+   {:type :single
+    :collapsible? true
+    :default-value (:selected-request-id view-state)
+    :class "shadow-none"
+    :attrs {:data-humanhelp-request-accordion true}}
+   (map
+    (fn [request]
+      (request-card
+       ctx
+       {:request request
+        :user user
+        :view-state view-state}))
+    requests)))
+
 (defn request-list-fragment
   [{:keys [ctx user view-state requests latest-revision]}]
   [:div {:id request-list-dom-id
@@ -340,26 +260,43 @@
          :data-latest-revision latest-revision
          :class "content-stack-theme"}
    (if (seq requests)
-     [:div {:class "content-stack-theme"}
-      (for [request requests]
-        (request-card
-         ctx
-         {:request request
-          :user user
-          :view-state view-state
-          :request-list-dom-id request-list-dom-id}))]
+     (request-accordion
+      {:ctx ctx
+       :user user
+       :view-state view-state
+       :requests requests})
      (empty-request-list {:view-state view-state}))])
 
 ;; -----------------------------------------------------------------------------
 ;; Create request dialog
 ;; -----------------------------------------------------------------------------
 
-(defn field-error
-  [errors k]
-  (when-let [error (get errors k)]
-    [:p {:class "font-body text-sm-theme leading-body"
-         :style {:color "var(--destructive)"}}
-     error]))
+(defn create-field
+  [{:keys [id label name value placeholder errors error-key]}]
+  (g/field
+   {:for id
+    :label-text label
+    :error (get errors error-key)
+    :control
+    (g/input
+     {:id id
+      :name name
+      :value value
+      :placeholder placeholder})}))
+
+(defn create-textarea-field
+  [{:keys [id label name value placeholder errors error-key]}]
+  (g/field
+   {:for id
+    :label-text label
+    :error (get errors error-key)
+    :control
+    (g/textarea
+     {:id id
+      :name name
+      :rows 4
+      :value value
+      :placeholder placeholder})}))
 
 (defn create-request-dialog-content
   [ctx {:keys [user values errors]}]
@@ -368,12 +305,14 @@
     [:div {:id create-request-dialog-body-id
            :class "pad-card content-stack-theme"}
      [:div {:class "title-stack-theme"}
-      [:h2 {:class "font-heading text-2xl-theme leading-heading tracking-heading weight-bold-theme"}
-       "Create request"]
+      (g/section-title
+       {:text "Create request"
+        :class "text-2xl-theme weight-bold-theme"})
 
-      [:p {:class "font-body text-sm-theme leading-body"
-           :style {:color "var(--muted-foreground)"}}
-       "Everyone can make and service requests in this Human Help analogue."]]
+      (g/muted-text
+       {:as :p
+        :class "text-sm-theme leading-body"
+        :text "Everyone can make and service requests in this Human Help analogue."})]
 
      [:form {:method "post"
              :hx-post (routes/create-request-url)
@@ -381,46 +320,42 @@
              :class "form-theme"}
       (g/anti-forgery-input ctx)
 
-      [:label {:class "content-stack-theme gap-field"}
-       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
-        "Your name"]
-       [:input {:name "customer-name"
-                :value (or (:customer-name values)
-                           (user-email user))
-                :class "control-theme radius-md border-theme font-body text-sm-theme"
-                :style (attr-style-control)}]
-       (field-error errors :customer-name)]
+      (create-field
+       {:id "humanhelp-create-customer-name"
+        :label "Your name"
+        :name "customer-name"
+        :value (or (:customer-name values)
+                   (account-email user)
+                   "")
+        :errors errors
+        :error-key :customer-name})
 
-      [:label {:class "content-stack-theme gap-field"}
-       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
-        "Area"]
-       [:input {:name "area"
-                :value (or (:area values) "")
-                :placeholder "Garden"
-                :class "control-theme radius-md border-theme font-body text-sm-theme"
-                :style (attr-style-control)}]
-       (field-error errors :area)]
+      (create-field
+       {:id "humanhelp-create-area"
+        :label "Area"
+        :name "area"
+        :value (or (:area values) "")
+        :placeholder "Garden"
+        :errors errors
+        :error-key :area})
 
-      [:label {:class "content-stack-theme gap-field"}
-       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
-        "Request"]
-       [:input {:name "title"
-                :value (or (:title values) "")
-                :placeholder "Need help finding a rake"
-                :class "control-theme radius-md border-theme font-body text-sm-theme"
-                :style (attr-style-control)}]
-       (field-error errors :title)]
+      (create-field
+       {:id "humanhelp-create-title"
+        :label "Request"
+        :name "title"
+        :value (or (:title values) "")
+        :placeholder "Need help finding a rake"
+        :errors errors
+        :error-key :title})
 
-      [:label {:class "content-stack-theme gap-field"}
-       [:span {:class "font-heading text-sm-theme weight-semibold-theme"}
-        "Details"]
-       [:textarea {:name "details"
-                   :rows 4
-                   :placeholder "Add item, aisle, or context."
-                   :class "control-theme radius-md border-theme font-body text-sm-theme"
-                   :style (attr-style-control)}
-        (or (:details values) "")]
-       (field-error errors :details)]
+      (create-textarea-field
+       {:id "humanhelp-create-details"
+        :label "Details"
+        :name "details"
+        :value (or (:details values) "")
+        :placeholder "Add item, aisle, or context."
+        :errors errors
+        :error-key :details})
 
       [:div {:class "cluster-theme justify-end"}
        (g/button
@@ -437,16 +372,17 @@
 
 (defn create-request-dialog
   [ctx {:keys [open?] :as opts}]
-  [:dialog (cond-> {:id create-request-dialog-id
-                    :class "radius-xl border-theme shadow-xl"
-                    :style {:border-style "solid"
-                            :border-color "var(--border)"
-                            :background "var(--card)"
-                            :color "var(--card-foreground)"
-                            :max-width "min(34rem, calc(100vw - 2rem))"
-                            :width "100%"
-                            :padding "0"}}
-             open? (assoc :open true))
+  [:dialog
+   (cond-> {:id create-request-dialog-id
+            :class "radius-xl border-theme shadow-xl"
+            :style {:border-style "solid"
+                    :border-color "var(--border)"
+                    :background "var(--card)"
+                    :color "var(--card-foreground)"
+                    :max-width "min(34rem, calc(100vw - 2rem))"
+                    :width "100%"
+                    :padding "0"}}
+     open? (assoc :open true))
    (create-request-dialog-content ctx opts)])
 
 (defn create-request-dialog-fragment
@@ -462,6 +398,23 @@
 ;; Page
 ;; -----------------------------------------------------------------------------
 
+(defn board-card
+  [{:keys [view-state request-toolbar-panel request-list-panel]}]
+  (g/card
+   {:class "shadow-lg"
+    :attrs {:data-humanhelp-board true}}
+   (g/card-content
+    {:class "content-stack-theme"}
+    (or request-toolbar-panel
+        [:div {:id request-toolbar-dom-id}
+         (muted "Request toolbar loading...")])
+
+    (search-control {:view-state view-state})
+
+    (or request-list-panel
+        [:div {:id request-list-dom-id}
+         (muted "Request list loading...")]))))
+
 (defn page
   [ctx {:keys [user
                view-state
@@ -469,32 +422,21 @@
                request-list-panel]}]
   (ui/page-shell
    ctx
+   {:user user}
 
    (client-plumbing/listener ctx)
 
    [:div {:class "relative isolate min-h-screen"
           :style {:background "var(--background)"
                   :color "var(--foreground)"}}
-    (app-bar ctx user)
-
-    [:main {:class "mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 lg:px-8"}
+    [:div {:class "mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 lg:px-8"}
      [:div {:class "content-stack-theme gap-section"}
       (hero)
 
-      [:section {:class "radius-2xl border-theme pad-card content-stack-theme shadow-lg"
-                 :style {:border-style "solid"
-                         :border-color "var(--border)"
-                         :background "var(--card)"
-                         :color "var(--card-foreground)"}}
-       (or request-toolbar-panel
-           [:div {:id request-toolbar-dom-id}
-            (muted "Request toolbar loading...")])
-
-       (search-control {:view-state view-state})
-
-       (or request-list-panel
-           [:div {:id request-list-dom-id}
-            (muted "Request list loading...")])]
+      (board-card
+       {:view-state view-state
+        :request-toolbar-panel request-toolbar-panel
+        :request-list-panel request-list-panel})
 
       (create-request-dialog
        ctx
