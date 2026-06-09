@@ -100,7 +100,7 @@
     (string? x)
     (try
       (UUID/fromString x)
-      (catch Exception e
+      (catch Exception _
         nil))
 
     :else
@@ -150,7 +150,7 @@
                           :where [:= :xt/id uid]})
                 first
                 :user/email)
-        (catch Exception e
+        (catch Exception _
           nil)))))
 
 (defn current-user-email
@@ -306,13 +306,16 @@
   (g/oob-outer-html
    views/board-state-form-id
    (views/search-control
+    ctx
     {:view-state (data/normalize-view-state ctx view-state)})))
 
 (defn with-board-state-oob
   [ctx node view-state]
   (views/oob-response
-   node
-   (board-state-form-oob ctx view-state)))
+   ;; Put board-state first so the browser updates the hidden state before
+   ;; processing any other OOB fragments from the same response.
+   (board-state-form-oob ctx view-state)
+   node))
 
 ;; -----------------------------------------------------------------------------
 ;; Render helpers
@@ -441,7 +444,9 @@
 (defn create-request-success-response
   [ctx {:keys [request revision view-state]}]
   (let [user         (current-user ctx)
-        view-state'  (assoc view-state :visible-revision revision)
+        view-state'  (assoc view-state
+                             :visible-revision revision
+                             :selected-request-id (:request/id request))
         toolbar      (render-toolbar-node ctx view-state')
         request-list (render-list-node ctx view-state')]
     (html
@@ -465,7 +470,9 @@
 
    Other connected users:
    - receive a best-effort toast through Human Help live notification helpers
-   - receive toolbar/count/stale indicator through model-backed Live
+   - do not receive model-backed :request/created invalidation yet, because
+     that currently cannot exclude the creator and can race the creator's local
+     OOB response
    - their list does not jump until they refresh"
   [ctx]
   (let [user       (current-user ctx)
@@ -486,14 +493,18 @@
              {:user user
               :input input})]
 
-        (app-live/notify!
-         (live-system ctx)
-         ctx
-         (app-live/request-created-change
-          {:request request
-           :revision revision
-           :actor user}))
-
+        ;; Do not emit the model-backed :request/created invalidation here.
+        ;;
+        ;; The create POST response already OOB-replaces the creator's toolbar,
+        ;; list, dialog, and board-state form at the new visible revision. A
+        ;; simultaneous SSE wake-up for :request/created can race that response,
+        ;; fetch the toolbar using the creator's old hidden visible-revision, and
+        ;; reintroduce the pointless "refresh to see your own request" state.
+        ;;
+        ;; Other connected users still get the page-global new-request toast via
+        ;; client plumbing, excluding the creator. When Gesso Live grows
+        ;; per-invalidation actor exclusion, :request/created can safely wake
+        ;; non-actor toolbars again.
         (send-new-request-toast-safely! request user)
 
         (create-request-success-response
