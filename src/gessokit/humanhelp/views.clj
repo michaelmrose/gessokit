@@ -14,6 +14,7 @@
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.components.request-card.core :refer [request-card]]
+   [gessokit.humanhelp.components.refresh-button.core :refer [refresh-button]]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.ui :as ui]))
@@ -240,7 +241,7 @@
 ;; Request toolbar
 ;; -----------------------------------------------------------------------------
 
-(defn refresh-form
+#_(defn refresh-form
   [ctx view-state stale?]
   (g/form
    ctx
@@ -252,6 +253,16 @@
     {:variant (if stale? :primary :outline)
      :text "Refresh"
      :attrs {:type "submit"}})))
+
+(defn refresh-form
+  [ctx view-state stale?]
+  (g/form
+    ctx
+    {:post (routes/refresh-requests-url)
+     :swap "none"
+     :inline? true
+     :attrs {:hx-include (board-state-selector)}}
+    (refresh-button {:stale? stale?})))
 
 (defn request-toolbar-heading
   [{:keys [open-count pending-open-count]}]
