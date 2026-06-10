@@ -6,24 +6,20 @@
         (remove (comp nil? val))
         m))
 
-(defn- card-surface
-  []
-  "color-mix(in srgb, var(--card) 46%, var(--background))")
-
 (defn card-style
   [open?]
   (compact-style
    {:border-style "solid"
     :border-width "1px"
     :border-color (if open?
-                    "color-mix(in srgb, var(--primary) 48%, var(--border))"
-                    "color-mix(in srgb, var(--border) 82%, transparent)")
-    :background (card-surface)
+                    "color-mix(in srgb, var(--primary) 72%, var(--border))"
+                    "color-mix(in srgb, var(--border) 72%, transparent)")
+    :background "color-mix(in srgb, var(--background) 88%, black)"
     :color "var(--foreground)"
     :box-shadow (if open?
-                  (str "0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent), "
-                       "0 10px 24px color-mix(in srgb, black 22%, transparent)")
-                  "0 6px 18px color-mix(in srgb, black 14%, transparent)")}))
+                  (str "0 0 0 3px color-mix(in srgb, var(--primary) 34%, transparent), "
+                       "0 18px 44px color-mix(in srgb, black 34%, transparent)")
+                  "0 10px 26px color-mix(in srgb, black 18%, transparent)") }))
 
 (defn item-class
   []
@@ -37,52 +33,59 @@
 
 (defn summary-attrs
   []
-  {:class "cursor-pointer w-full list-none pad-row flex items-start justify-between gap-inline outline-none"
+  {:class "cursor-pointer w-full list-none flex items-start justify-between gap-inline outline-none"
    :data-humanhelp-request-summary true
-   :style {:background "transparent"
+   :style {:padding "1.75rem 1.75rem 1rem"
+           :background "transparent"
            :color "var(--foreground)"
            :font-weight 500
            :box-shadow "none"}})
 
 (defn header-stack-attrs
   []
-  {:class "content-stack-theme gap-field min-w-0"})
+  {:class "content-stack-theme min-w-0"
+   :style {:gap "0.85rem"}})
 
 (defn title-attrs
   []
-  {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme min-w-0"
+  {:class "font-heading text-lg-theme leading-heading tracking-heading weight-semibold-theme min-w-0"
    :style {:color "var(--foreground)"}})
 
 (defn meta-attrs
   []
   {:class "cluster-theme items-center"
-   :style {:color "var(--muted-foreground)"}})
+   :style {:gap "1rem"
+           :color "var(--muted-foreground)"}})
 
 (defn customer-row-attrs
   []
   {:class "cluster-theme items-center"
-   :style {:color "var(--muted-foreground)"}})
+   :style {:color "var(--foreground)"}})
 
 (defn chevron-attrs
   [open?]
   {:data-accordion-chevron true
    :aria-hidden "true"
-   :style {:color "var(--muted-foreground)"
+   :style {:color "var(--foreground)"
+           :opacity 0.9
            :transform (if open?
                         "rotate(180deg)"
                         "rotate(0deg)")}})
 
 (defn details-attrs
   []
-  {:class "content-stack-theme pad-row"
-   :style {:background "transparent"
-           :border-top "1px solid color-mix(in srgb, var(--border) 72%, transparent)"}})
+  {:class "content-stack-theme"
+   :attrs {:style {:padding "0 1.75rem 1.75rem"
+                   :background "transparent"
+                   :border-top "0"
+                   :color "var(--foreground)"}}})
+
 
 (defn actions-attrs
   []
   {:class "cluster-theme items-center justify-end"
-   :style {:padding-top "var(--space-field)"
-           :border-top "1px solid color-mix(in srgb, var(--border) 58%, transparent)"}})
+   :style {:padding-top "1rem"
+           :border-top "0"}})
 
 (defn action-form-attrs
   [{:keys [to attrs]}]
