@@ -6,53 +6,30 @@
         (remove (comp nil? val))
         m))
 
-(defn selected-ring-color
-  []
-  ;; cosmicnight dark:
-  ;;   --primary / --ring = purple
-  ;;   --accent = muted violet surface
-  ;;   --chart-4 = cyan/teal accent
-  "var(--chart-4)")
-
 (defn card-surface
   []
-  ;; Dark request-row surface. --card alone is too light/violet for these rows.
   "color-mix(in srgb, var(--background) 82%, var(--card) 18%)")
 
-(defn selected-card-shadow
-  []
-  (let [ring (selected-ring-color)]
-    (str "0 0 0 1px color-mix(in srgb, " ring " 92%, white 8%), "
-         "0 0 0 5px color-mix(in srgb, " ring " 30%, transparent), "
-         "0 0 34px color-mix(in srgb, " ring " 38%, transparent), "
-         "var(--shadow-lg)")))
-
 (defn card-style
-  [open?]
+  []
   (compact-style
    {:position "relative"
-    :z-index (when open? "1")
     :border-style "solid"
     :border-width "1px"
-    :border-color (if open?
-                    (selected-ring-color)
-                    "color-mix(in srgb, var(--border) 80%, transparent)")
+    :border-color "color-mix(in srgb, var(--border) 80%, transparent)"
     :background (card-surface)
     :color "var(--foreground)"
-    :box-shadow (if open?
-                  (selected-card-shadow)
-                  "var(--shadow-sm)")}))
+    :box-shadow "var(--shadow-sm)"}))
 
 (defn item-class
   []
   "radius-xl border-theme transition-all")
 
 (defn item-attrs
-  [request open?]
+  [request _open?]
   {:id (str "humanhelp-request-" (:request/id request))
    :data-humanhelp-request-card true
-   :data-humanhelp-request-selected (when open? "true")
-   :style (card-style open?)})
+   :style (card-style)})
 
 (defn summary-attrs
   []
@@ -84,20 +61,15 @@
    :style {:color "var(--foreground)"}})
 
 (defn chevron-attrs
-  [open?]
+  [_open?]
   {:data-accordion-chevron true
    :aria-hidden "true"
-   :style {:color (if open?
-                    (selected-ring-color)
-                    "var(--muted-foreground)")
-           :opacity (if open? "1" "0.9")
-           :transform (if open?
-                        "rotate(180deg)"
-                        "rotate(0deg)")}})
+   :style {:color "var(--muted-foreground)"
+           :opacity "0.9"
+           :transform "rotate(0deg)"}})
 
 (defn details-attrs
   []
-  ;; g/accordion-content expects low-level HTML attrs under :attrs.
   {:class "content-stack-theme"
    :attrs {:style {:padding "0 1.25rem 1.25rem"
                    :background "transparent"

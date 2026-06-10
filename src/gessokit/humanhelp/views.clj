@@ -9,11 +9,7 @@
    - Gesso Live model compilation
    - Ring route tables
 
-   Data comes in from app/live/store boundary namespaces.
-
-   DOM ids are intentionally kept here because they are view-owned names. Live
-   code may lazy-resolve these Vars, but this namespace must not require
-   gessokit.humanhelp.live."
+   Data comes in from app/live/store boundary namespaces."
   (:require
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
@@ -42,6 +38,21 @@
   "humanhelp-board-state")
 
 ;; -----------------------------------------------------------------------------
+;; Stable board-state selectors
+;; -----------------------------------------------------------------------------
+
+(defn board-state-selector
+  []
+  (str "#" board-state-form-id))
+
+(defn selected-state-input-selector
+  []
+  (str (board-state-selector)
+       " input[name="
+       routes/selected-param
+       "]"))
+
+;; -----------------------------------------------------------------------------
 ;; Small helpers
 ;; -----------------------------------------------------------------------------
 
@@ -66,7 +77,7 @@
 (defn view-state-hidden-inputs
   "Render full view-state hidden inputs.
 
-   Use this for action forms that do not have their own visible search input.
+   Use this for forms that do not have their own visible search input.
    Do not use this inside search-control, because that form already has the
    visible search input named q."
   [{:keys [search selected-request-id visible-revision]}]
@@ -76,14 +87,17 @@
    (hidden-input routes/visible-revision-param visible-revision)])
 
 (defn board-state-hidden-inputs
-  "Render board-state hidden inputs for the search form.
+  "Render board-state hidden inputs for the search/board-state form.
 
    Deliberately omits q/search because the visible search input is the source
    of truth for q. Rendering both a hidden q and visible q causes repeated
-   params such as [\"\" \"test\"]."
+   params such as [\"\" \"test\"].
+
+   The selected input is always rendered, even when blank, because the generic
+   Gesso accordion state-sync script needs a stable input to write into."
   [{:keys [selected-request-id visible-revision]}]
   [:div {:style {:display "contents"}}
-   (hidden-input routes/selected-param selected-request-id)
+   (hidden-input routes/selected-param (or selected-request-id ""))
    (hidden-input routes/visible-revision-param visible-revision)])
 
 (defn oob-response
@@ -134,18 +148,14 @@
       :placeholder placeholder})}))
 
 (defn create-request-form
-  [ctx {:keys [user values errors view-state]}]
+  [ctx {:keys [user values errors]}]
   (let [values (or values {})
         errors (or errors {})]
     (g/form
      ctx
      {:post (routes/create-request-url)
-      :swap "none"}
-     ;; Create is an action form, not the board-state/search form, so it should
-     ;; carry the current board state as hidden inputs. This preserves search,
-     ;; selected request, and visible revision across create validation/success.
-     (view-state-hidden-inputs view-state)
-
+      :swap "none"
+      :attrs {:hx-include (board-state-selector)}}
      (create-field
       {:id "humanhelp-create-customer-name"
        :label "Your name"
@@ -178,6 +188,7 @@
       {:id "humanhelp-create-details"
        :label "Details"
        :name "details"
+       :rows 4
        :value (or (:details values) "")
        :placeholder "Add item, aisle, or context."
        :errors errors
@@ -217,13 +228,12 @@
      :body [(create-request-dialog-body ctx opts)]})))
 
 (defn create-request-dialog-fragment
-  [ctx {:keys [user values errors open? view-state]}]
+  [ctx {:keys [user values errors open?]}]
   (create-request-dialog
    ctx
    {:user user
     :values values
     :errors errors
-    :view-state view-state
     :open? open?}))
 
 ;; -----------------------------------------------------------------------------
@@ -236,8 +246,8 @@
    ctx
    {:post (routes/refresh-requests-url)
     :swap "none"
-    :inline? true}
-   (view-state-hidden-inputs view-state)
+    :inline? true
+    :attrs {:hx-include (board-state-selector)}}
    (g/button
     {:variant (if stale? :primary :outline)
      :text "Refresh"
@@ -291,7 +301,6 @@
               {:user user
                :values {}
                :errors {}
-               :view-state view-state
                :open? false})]})
 
      (when stale?
@@ -348,13 +357,11 @@
    {:type :single
     :collapsible? true
     :default-value (:selected-request-id view-state)
-    :class "content-stack-theme gap-field shadow-none"
-    :attrs {:data-humanhelp-request-accordion true
-            :style {:border "0"
-                    :background "transparent"
-                    :box-shadow "none"
-                    :overflow "visible"
-                    :padding "0"}}}
+    :state-input (selected-state-input-selector)
+    :state-name routes/selected-param
+    :state-include? true
+    :class "content-stack-theme shadow-none"
+    :attrs {:data-humanhelp-request-accordion true}}
    (map
     (fn [request]
       (request-card
@@ -363,7 +370,6 @@
         :user user
         :view-state view-state}))
     requests)))
-
 
 (defn request-list-fragment
   [{:keys [ctx user view-state requests latest-revision]}]
@@ -446,14 +452,13 @@
      (replace-request-list-oob request-list))))
 
 (defn create-request-validation-error
-  [ctx {:keys [user values errors view-state]}]
+  [ctx {:keys [user values errors]}]
   (replace-dialog-oob
    (create-request-dialog
     ctx
     {:user user
      :values values
      :errors errors
-     :view-state view-state
      :open? true})))
 
 (defn create-request-success
