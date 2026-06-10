@@ -7,4 +7,7 @@
    :data-humanhelp-refresh-stale (when stale? "true")
    :aria-label (if stale?
                  "Refresh requests. New request data is available."
-                 "Refresh requests")})
+                 "Refresh requests")
+   :title (if stale?
+            "New requests received"
+            "Refresh requests")})

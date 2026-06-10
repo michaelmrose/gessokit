@@ -241,19 +241,6 @@
 ;; Request toolbar
 ;; -----------------------------------------------------------------------------
 
-#_(defn refresh-form
-  [ctx view-state stale?]
-  (g/form
-   ctx
-   {:post (routes/refresh-requests-url)
-    :swap "none"
-    :inline? true
-    :attrs {:hx-include (board-state-selector)}}
-   (g/button
-    {:variant (if stale? :primary :outline)
-     :text "Refresh"
-     :attrs {:type "submit"}})))
-
 (defn refresh-form
   [ctx view-state stale?]
   (g/form
@@ -426,7 +413,9 @@
    ctx
    {:user user}
 
-   (client-plumbing/listener ctx)
+   (client-plumbing/listener
+     ctx
+     {:trigger-attrs {:hx-include (board-state-selector)}})
 
    (ui/container
     [:div {:class "content-stack-theme gap-section"}

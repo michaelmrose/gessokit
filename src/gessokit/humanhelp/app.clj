@@ -280,6 +280,44 @@
   {:toolbar (render-toolbar-node ctx view-state)
    :request-list (render-list-node ctx view-state)})
 
+(defn previous-revision
+  [revision]
+  (when (number? revision)
+    (max 0 (dec revision))))
+
+(defn receiver-view-state-for-new-request
+  "Return the receiving browser's view-state for a new-request notification.
+
+   Normally the pending client-plumbing request includes #humanhelp-board-state,
+   so the receiving browser supplies its actual visible-revision. If that input
+   is missing for any reason, fall back to a definitely-stale visible revision
+   rather than rendering a non-glowing toolbar."
+  [ctx revision]
+  (let [view-state (request-view-state ctx)]
+    (data/normalize-view-state
+     ctx
+     (cond-> view-state
+       (nil? (:visible-revision view-state))
+       (assoc :visible-revision (previous-revision revision))))))
+
+(defn new-request-client-oob
+  "Return a client-plumbing pending fragment function for a newly-created request.
+
+   This runs at drain time using the receiving browser's ctx, so the toolbar is
+   rendered using that browser's search/selected/visible-revision state. It also
+   sends the new-request toast through the same immediate client-plumbing path."
+  [request revision]
+  (fn [receiver-ctx]
+    (let [view-state (receiver-view-state-for-new-request receiver-ctx revision)
+          toolbar    (render-toolbar-node receiver-ctx view-state)]
+      (views/oob-response
+       (views/replace-toolbar-oob toolbar)
+       (g/render-toast-oob
+        {:variant :info
+         :duration 5000
+         :title "New request received"
+         :description (app-live/request-toast-description request)})))))
+
 ;; -----------------------------------------------------------------------------
 ;; Page
 ;; -----------------------------------------------------------------------------
@@ -341,14 +379,15 @@
 ;; Best-effort side effects
 ;; -----------------------------------------------------------------------------
 
-(defn send-new-request-toast-safely!
-  [request user]
+(defn send-new-request-ui-safely!
+  [request revision user]
   (try
-    (app-live/send-new-request-toast!
-     request
-     {:actor user})
+    (client-plumbing/send-to-scope-except-user!
+     app-live/notification-scope
+     (:user/id user)
+     (new-request-client-oob request revision))
     (catch Exception e
-      (println "[humanhelp] send-new-request-toast! failed"
+      (println "[humanhelp] send-new-request-ui! failed"
                {:message (.getMessage e)}))))
 
 (defn send-reset-toast-safely!
@@ -391,10 +430,9 @@
    - visible list refreshes to include the new request
 
    Other connected users:
-   - receive a best-effort toast through Human Help live notification helpers
-   - do not receive model-backed :request/created invalidation yet, because
-     that currently cannot exclude the creator and can race the creator's local
-     OOB response
+   - receive one immediate client-plumbing OOB response containing:
+     - new-request toast
+     - stale request toolbar with glowing refresh affordance
    - their list does not jump until they refresh"
   [ctx]
   (let [user       (current-user ctx)
@@ -418,16 +456,12 @@
         ;; Do not emit the model-backed :request/created invalidation here.
         ;;
         ;; The create POST response already OOB-replaces the creator's toolbar,
-        ;; list, dialog, and board-state form at the new visible revision. A
-        ;; simultaneous SSE wake-up for :request/created can race that response,
-        ;; fetch the toolbar using the creator's old hidden visible-revision, and
-        ;; reintroduce the pointless "refresh to see your own request" state.
+        ;; list, dialog, and board-state form at the new visible revision.
         ;;
-        ;; Other connected users still get the page-global new-request toast via
-        ;; client plumbing, excluding the creator. When Gesso Live grows
-        ;; per-invalidation actor exclusion, :request/created can safely wake
-        ;; non-actor toolbars again.
-        (send-new-request-toast-safely! request user)
+        ;; Other connected users get the stale-toolbar affordance and toast via
+        ;; client plumbing, using the same immediate wake-up path that already
+        ;; delivers page-global OOB work.
+        (send-new-request-ui-safely! request revision user)
 
         (create-request-success-response
          ctx

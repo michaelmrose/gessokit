@@ -114,27 +114,65 @@
 ;; -----------------------------------------------------------------------------
 ;; Browser listener
 ;; -----------------------------------------------------------------------------
+;; -----------------------------------------------------------------------------
+;; Browser listener
+;; -----------------------------------------------------------------------------
 
 (defn new-client-id
   []
   (live-client/new-client-id))
 
+(defn- listener-options
+  [client-id options]
+  (let [options   (or options {})
+        client-id (or client-id
+                      (:client/id options)
+                      (new-client-id))
+        id        (or (:id options)
+                      (str "client-plumbing-listener-" client-id))]
+    (-> options
+        (assoc :client/id client-id
+               :id id)
+        (update :attrs
+                #(merge {:data-client-plumbing-listener true}
+                        %)))))
+
 (defn listener
   "Render the browser-side listener for one connected client.
 
-   Arity 1 generates a new client id.
+   Call shapes:
 
-   Arity 2 uses the supplied client id, which is useful when the page wants to
-   display/debug the exact browser client id."
+     (listener ctx)
+
+     (listener ctx client-id)
+
+     (listener ctx options)
+
+     (listener ctx client-id options)
+
+   Options are passed through to gesso.live.client/listener after adding the
+   Gessokit listener marker. Useful options include:
+
+     :attrs
+       Extra attrs for the SSE listener wrapper.
+
+     :trigger-attrs
+       Extra attrs for the pending-fetch trigger. Human Help uses this to add
+       hx-include=\"#humanhelp-board-state\" so client-plumbing pending requests
+       carry the receiving browser's board state."
   ([ctx]
-   (live-client/listener channel ctx))
-  ([ctx client-id]
+   (listener ctx nil nil))
+
+  ([ctx client-id-or-options]
+   (if (map? client-id-or-options)
+     (listener ctx nil client-id-or-options)
+     (listener ctx client-id-or-options nil)))
+
+  ([ctx client-id options]
    (live-client/listener
     channel
     ctx
-    {:client/id client-id
-     :id (str "client-plumbing-listener-" client-id)
-     :attrs {:data-client-plumbing-listener true}})))
+    (listener-options client-id options))))
 
 ;; -----------------------------------------------------------------------------
 ;; Route handlers
@@ -155,7 +193,7 @@
 ;; -----------------------------------------------------------------------------
 
 (defn send!
-  "Send arbitrary complete OOB fragments to a target.
+ "Send arbitrary OOB fragments to a target.
 
    Target forms:
      :all
@@ -163,10 +201,19 @@
      [:user user-id]
      [:scope scope]
 
-   Fragments should already be HTMX OOB Hiccup, for example:
+   Fragments may be complete HTMX OOB Hiccup nodes:
 
      (g/oob-inner-html \"notification-count\" \"3\")
-     (g/render-toast-oob toast)"
+     (g/render-toast-oob toast)
+
+   or functions of receiving ctx -> OOB Hiccup:
+
+     (fn [ctx]
+       (render-receiver-specific-oob ctx))
+
+   Function fragments are rendered when the receiving browser drains pending
+   work, so they can use that browser's params, session, user, and included
+   board state."
   [to & fragments]
   (live-client/send!
    channel
