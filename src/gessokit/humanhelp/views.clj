@@ -348,8 +348,13 @@
    {:type :single
     :collapsible? true
     :default-value (:selected-request-id view-state)
-    :class "content-stack-theme shadow-none"
-    :attrs {:data-humanhelp-request-accordion true}}
+    :class "content-stack-theme gap-field shadow-none"
+    :attrs {:data-humanhelp-request-accordion true
+            :style {:border "0"
+                    :background "transparent"
+                    :box-shadow "none"
+                    :overflow "visible"
+                    :padding "0"}}}
    (map
     (fn [request]
       (request-card
@@ -358,6 +363,7 @@
         :user user
         :view-state view-state}))
     requests)))
+
 
 (defn request-list-fragment
   [{:keys [ctx user view-state requests latest-revision]}]

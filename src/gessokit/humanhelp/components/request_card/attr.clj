@@ -1,19 +1,33 @@
 (ns gessokit.humanhelp.components.request-card.attr)
 
+(defn- compact-style
+  [m]
+  (into {}
+        (remove (comp nil? val))
+        m))
+
+(defn- card-surface
+  []
+  "color-mix(in srgb, var(--card) 46%, var(--background))")
+
 (defn card-style
   [open?]
-  {:border-style "solid"
-   :border-color (if open?
-                   "var(--primary)"
-                   "var(--border)")
-   :background "var(--background)"
-   :color "var(--foreground)"
-   :box-shadow (when open?
-                 "0 0 0 3px color-mix(in srgb, var(--primary) 24%, transparent)")})
+  (compact-style
+   {:border-style "solid"
+    :border-width "1px"
+    :border-color (if open?
+                    "color-mix(in srgb, var(--primary) 48%, var(--border))"
+                    "color-mix(in srgb, var(--border) 82%, transparent)")
+    :background (card-surface)
+    :color "var(--foreground)"
+    :box-shadow (if open?
+                  (str "0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent), "
+                       "0 10px 24px color-mix(in srgb, black 22%, transparent)")
+                  "0 6px 18px color-mix(in srgb, black 14%, transparent)")}))
 
 (defn item-class
   []
-  "radius-xl border-theme transition-all")
+  "radius-xl transition-all overflow-hidden")
 
 (defn item-attrs
   [request open?]
@@ -25,10 +39,10 @@
   []
   {:class "cursor-pointer w-full list-none pad-row flex items-start justify-between gap-inline outline-none"
    :data-humanhelp-request-summary true
-   :style {:background "var(--secondary)"
-           :color "var(--primary)"
-           :font-weight 600
-           :box-shadow "inset 0 -1px 0 0 color-mix(in srgb, var(--foreground) 16%, transparent)"}})
+   :style {:background "transparent"
+           :color "var(--foreground)"
+           :font-weight 500
+           :box-shadow "none"}})
 
 (defn header-stack-attrs
   []
@@ -36,31 +50,39 @@
 
 (defn title-attrs
   []
-  {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme min-w-0"})
+  {:class "font-heading text-md-theme leading-heading tracking-heading weight-semibold-theme min-w-0"
+   :style {:color "var(--foreground)"}})
 
 (defn meta-attrs
   []
-  {:class "cluster-theme items-center"})
+  {:class "cluster-theme items-center"
+   :style {:color "var(--muted-foreground)"}})
 
 (defn customer-row-attrs
   []
-  {:class "cluster-theme items-center"})
+  {:class "cluster-theme items-center"
+   :style {:color "var(--muted-foreground)"}})
 
 (defn chevron-attrs
   [open?]
   {:data-accordion-chevron true
    :aria-hidden "true"
-   :style {:transform (if open?
+   :style {:color "var(--muted-foreground)"
+           :transform (if open?
                         "rotate(180deg)"
                         "rotate(0deg)")}})
 
-(defn details-stack-class
+(defn details-attrs
   []
-  "content-stack-theme")
+  {:class "content-stack-theme pad-row"
+   :style {:background "transparent"
+           :border-top "1px solid color-mix(in srgb, var(--border) 72%, transparent)"}})
 
 (defn actions-attrs
   []
-  {:class "cluster-theme items-center justify-end"})
+  {:class "cluster-theme items-center justify-end"
+   :style {:padding-top "var(--space-field)"
+           :border-top "1px solid color-mix(in srgb, var(--border) 58%, transparent)"}})
 
 (defn action-form-attrs
   [{:keys [to attrs]}]

@@ -136,11 +136,12 @@
 (defn request-content
   [ctx request user view-state]
   (g/accordion-content
-   {:class (attr/details-stack-class)}
+   (attr/details-attrs)
    (when (model/present? (:request/details request))
      (g/text
       {:as :p
        :variant :small
+       :class "leading-body"
        :text (:request/details request)}))
    (request-card-actions ctx request user view-state)))
 
