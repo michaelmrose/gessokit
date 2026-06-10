@@ -9,7 +9,11 @@
    - Gesso Live model compilation
    - Ring route tables
 
-   Data comes in from app/live/store boundary namespaces."
+   Data comes in from app/live/store boundary namespaces.
+
+   DOM ids are intentionally kept here because they are view-owned names. Live
+   code may lazy-resolve these Vars, but this namespace must not require
+   gessokit.humanhelp.live."
   (:require
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
@@ -130,13 +134,18 @@
       :placeholder placeholder})}))
 
 (defn create-request-form
-  [ctx {:keys [user values errors]}]
+  [ctx {:keys [user values errors view-state]}]
   (let [values (or values {})
         errors (or errors {})]
     (g/form
      ctx
      {:post (routes/create-request-url)
       :swap "none"}
+     ;; Create is an action form, not the board-state/search form, so it should
+     ;; carry the current board state as hidden inputs. This preserves search,
+     ;; selected request, and visible revision across create validation/success.
+     (view-state-hidden-inputs view-state)
+
      (create-field
       {:id "humanhelp-create-customer-name"
        :label "Your name"
@@ -208,12 +217,13 @@
      :body [(create-request-dialog-body ctx opts)]})))
 
 (defn create-request-dialog-fragment
-  [ctx {:keys [user values errors open?]}]
+  [ctx {:keys [user values errors open? view-state]}]
   (create-request-dialog
    ctx
    {:user user
     :values values
     :errors errors
+    :view-state view-state
     :open? open?}))
 
 ;; -----------------------------------------------------------------------------
@@ -281,6 +291,7 @@
               {:user user
                :values {}
                :errors {}
+               :view-state view-state
                :open? false})]})
 
      (when stale?
@@ -429,13 +440,14 @@
      (replace-request-list-oob request-list))))
 
 (defn create-request-validation-error
-  [ctx {:keys [user values errors]}]
+  [ctx {:keys [user values errors view-state]}]
   (replace-dialog-oob
    (create-request-dialog
     ctx
     {:user user
      :values values
      :errors errors
+     :view-state view-state
      :open? true})))
 
 (defn create-request-success

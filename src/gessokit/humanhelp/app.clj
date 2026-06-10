@@ -216,86 +216,8 @@
   (g/html-response node))
 
 ;; -----------------------------------------------------------------------------
-;; Stable live panels
+;; Board-state OOB
 ;; -----------------------------------------------------------------------------
-
-(def live-panel-trigger
-  "Events that should refresh a Human Help live panel.
-
-   Important: this trigger belongs on the stable SSE wrapper, not on the
-   replaceable inner fragment root. The inner root is replaced by fragment
-   responses and therefore must not own the long-lived SSE/fetch behavior."
-  "load, pageshow from:window, focus from:window, visibilitychange from:document, online from:window, htmx:sseOpen, sse:live-update")
-
-(defn fragment-dom-id
-  [fragment-name]
-  (case fragment-name
-    :request-toolbar views/request-toolbar-dom-id
-    :request-list views/request-list-dom-id
-    (throw
-     (ex-info "Unknown Human Help fragment DOM id."
-              {:fragment fragment-name}))))
-
-(defn fragment-label
-  [fragment-name]
-  (case fragment-name
-    :request-toolbar "humanhelp-request-toolbar-fragment"
-    :request-list "humanhelp-request-list-fragment"
-    (throw
-     (ex-info "Unknown Human Help fragment label."
-              {:fragment fragment-name}))))
-
-(defn fragment-url
-  [fragment-name]
-  (case fragment-name
-    :request-toolbar (routes/request-toolbar-fragment-url)
-    :request-list (routes/request-list-fragment-url)
-    (throw
-     (ex-info "Unknown Human Help fragment URL."
-              {:fragment fragment-name}))))
-
-(defn stream-url
-  [fragment-name]
-  (case fragment-name
-    :request-toolbar (routes/request-toolbar-stream-url)
-    :request-list (routes/request-list-stream-url)
-    (throw
-     (ex-info "Unknown Human Help stream URL."
-              {:fragment fragment-name}))))
-
-(defn live-panel
-  "Render a stable Human Help live panel.
-
-   The outer node owns:
-   - hx-ext=\"sse\"
-   - sse-connect
-   - hx-get
-   - hx-trigger
-   - hx-include
-
-   The inner node owns the fragment DOM id and is the replaceable target.
-
-   SSE is used as a wake-up signal. The SSE payload is not swapped directly.
-
-   Do not bake q/selected/visible-revision into hx-get. The current
-   #humanhelp-board-state form is the source of truth for fragment fetches."
-  [fragment-name]
-  (let [dom-id (fragment-dom-id fragment-name)]
-    [:div {:data-gesso-live-fragment (fragment-label fragment-name)
-           :hx-ext "sse"
-           :sse-connect (stream-url fragment-name)
-           :hx-get (fragment-url fragment-name)
-           :hx-include (str "#" views/board-state-form-id)
-           :hx-trigger live-panel-trigger
-           :hx-target (str "#" dom-id)
-           :hx-swap "outerHTML"}
-     [:div {:id dom-id}]]))
-
-(defn page-panels
-  "Return the stable live panels needed for the Human Help page."
-  []
-  {:request-toolbar-panel (live-panel :request-toolbar)
-   :request-list-panel (live-panel :request-list)})
 
 (defn board-state-form-oob
   "Render an OOB replacement for the board-state/search form.
@@ -330,7 +252,7 @@
     (merge
      {:user user
       :view-state view-state}
-     (page-panels))))
+     (app-live/page-panels view-state))))
 
 (defn fragment-render-options
   [ctx]

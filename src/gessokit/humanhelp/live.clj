@@ -13,15 +13,21 @@
    - Human Help notification/toast helpers
    - notification helper
 
-   Generic connected-browser/OOB mechanics live in gessokit.client-plumbing."
+   Generic connected-browser/OOB mechanics live in gessokit.client-plumbing.
+
+   Important load-boundary rule:
+   this namespace must not statically require gessokit.humanhelp.views.
+   gessokit.humanhelp.app needs both live and views, and the top-level app
+   loads the module during startup. A static live -> views edge creates a cyclic
+   load dependency during reload. View renderer Vars and view-owned DOM id Vars
+   are resolved lazily instead."
   (:require
    [gesso.core :as g]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.model :as model]
-   [gessokit.humanhelp.routes :as routes]
-   [gessokit.humanhelp.views :as views]))
+   [gessokit.humanhelp.routes :as routes]))
 
 ;; -----------------------------------------------------------------------------
 ;; Constants / render context
@@ -64,6 +70,41 @@
    (render-view-state ctx)))
 
 ;; -----------------------------------------------------------------------------
+;; Lazy view boundary
+;; -----------------------------------------------------------------------------
+
+(defn- resolve-view-var
+  [sym]
+  (or (requiring-resolve sym)
+      (throw
+       (ex-info "Could not resolve Human Help view var."
+                {:symbol sym}))))
+
+(defn- view-value
+  [sym]
+  @(resolve-view-var sym))
+
+(defn- call-view
+  [sym & args]
+  (apply @(resolve-view-var sym) args))
+
+(defn request-toolbar-dom-id
+  []
+  (view-value 'gessokit.humanhelp.views/request-toolbar-dom-id))
+
+(defn request-list-dom-id
+  []
+  (view-value 'gessokit.humanhelp.views/request-list-dom-id))
+
+(defn board-state-form-id
+  []
+  (view-value 'gessokit.humanhelp.views/board-state-form-id))
+
+(defn board-state-selector
+  []
+  (str "#" (board-state-form-id)))
+
+;; -----------------------------------------------------------------------------
 ;; Live scope authorization
 ;; -----------------------------------------------------------------------------
 
@@ -71,7 +112,7 @@
   "All signed-in users may see the one fake Human Help store.
 
    Real helper/helpee authorization is intentionally out of scope for the demo."
-  [ctx id]
+  [_ctx id]
   (= store-id id))
 
 ;; -----------------------------------------------------------------------------
@@ -102,11 +143,15 @@
 
 (defn request-toolbar-render
   [data]
-  (views/request-toolbar-fragment data))
+  (call-view
+   'gessokit.humanhelp.views/request-toolbar-fragment
+   data))
 
 (defn request-list-render
   [data]
-  (views/request-list-fragment data))
+  (call-view
+   'gessokit.humanhelp.views/request-list-fragment
+   data))
 
 ;; -----------------------------------------------------------------------------
 ;; Compiled live model
@@ -171,8 +216,8 @@
     :fragments
     {:request-toolbar
      {:scope :request-toolbar
-      :id-fn (fn [id]
-               views/request-toolbar-dom-id)
+      :id-fn (fn [_id]
+               (request-toolbar-dom-id))
       :query request-toolbar-query
       :render request-toolbar-render
       :swap :outerHTML
@@ -182,8 +227,8 @@
 
      :request-list
      {:scope :request-list
-      :id-fn (fn [id]
-               views/request-list-dom-id)
+      :id-fn (fn [_id]
+               (request-list-dom-id))
       :query request-list-query
       :render request-list-render
       :swap :outerHTML
@@ -203,46 +248,63 @@
 ;; -----------------------------------------------------------------------------
 
 (defn fragment-options
-  [fragment-name view-state]
-  (case fragment-name
-    :request-toolbar
-    {:fragment-url (routes/request-toolbar-fragment-url view-state)
-     :stream-url (routes/request-toolbar-stream-url view-state)}
+  "Return model-backed fragment panel options.
 
-    :request-list
-    {:fragment-url (routes/request-list-fragment-url view-state)
-     :stream-url (routes/request-list-stream-url view-state)}
+   The fragment and stream URLs intentionally omit q/selected/visible-revision.
+   Browser-local board state is carried by #humanhelp-board-state and included
+   on live fragment fetches through :root-attrs. This keeps the stable live
+   wrapper generic while preserving the current client-side view state."
+  ([fragment-name]
+   (fragment-options fragment-name nil))
+  ([fragment-name _view-state]
+   (case fragment-name
+     :request-toolbar
+     {:fragment-url (routes/request-toolbar-fragment-url)
+      :stream-url (routes/request-toolbar-stream-url)
+      :root-attrs {:hx-include (board-state-selector)}}
 
-    (throw
-     (ex-info "Unknown Human Help live fragment."
-              {:fragment fragment-name
-               :known-fragments [:request-toolbar :request-list]}))))
+     :request-list
+     {:fragment-url (routes/request-list-fragment-url)
+      :stream-url (routes/request-list-stream-url)
+      :root-attrs {:hx-include (board-state-selector)}}
+
+     (throw
+      (ex-info "Unknown Human Help live fragment."
+               {:fragment fragment-name
+                :known-fragments [:request-toolbar :request-list]})))))
 
 ;; -----------------------------------------------------------------------------
 ;; Initial panels
 ;; -----------------------------------------------------------------------------
 
 (defn request-toolbar-panel
-  [view-state]
-  (live/model-fragment-panel
-   compiled-live
-   :request-toolbar
-   store-id
-   (fragment-options :request-toolbar view-state)))
+  ([] (request-toolbar-panel nil))
+  ([_view-state]
+   (live/model-fragment-panel
+    compiled-live
+    :request-toolbar
+    store-id
+    (fragment-options :request-toolbar))))
 
 (defn request-list-panel
-  [view-state]
-  (live/model-fragment-panel
-   compiled-live
-   :request-list
-   store-id
-   (fragment-options :request-list view-state)))
+  ([] (request-list-panel nil))
+  ([_view-state]
+   (live/model-fragment-panel
+    compiled-live
+    :request-list
+    store-id
+    (fragment-options :request-list))))
 
 (defn page-panels
-  "Return the model-backed live panels needed for the Human Help page."
-  [view-state]
-  {:request-toolbar-panel (request-toolbar-panel view-state)
-   :request-list-panel (request-list-panel view-state)})
+  "Return the model-backed live panels needed for the Human Help page.
+
+   The view-state argument is accepted for call-site compatibility, but the
+   current browser-side board state is supplied through hx-include on the
+   rendered panel rather than baked into panel URLs."
+  ([] (page-panels nil))
+  ([_view-state]
+   {:request-toolbar-panel (request-toolbar-panel)
+    :request-list-panel (request-list-panel)}))
 
 ;; -----------------------------------------------------------------------------
 ;; Fragment render / response helpers
