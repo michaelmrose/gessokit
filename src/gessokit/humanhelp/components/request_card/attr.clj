@@ -8,44 +8,35 @@
 
 (defn selected-ring-color
   []
-  ;; In cosmicnight:
+  ;; cosmicnight dark:
   ;;   --primary / --ring = purple
   ;;   --accent = muted violet surface
-  ;;   --chart-4 = cyan/teal
+  ;;   --chart-4 = cyan/teal accent
   "var(--chart-4)")
 
 (defn card-surface
   []
-  ;; Darker than --card, but still theme-derived.
-  ;; In dark cosmicnight, --card is too light/violet for these request rows.
+  ;; Dark request-row surface. --card alone is too light/violet for these rows.
   "color-mix(in srgb, var(--background) 82%, var(--card) 18%)")
-
-(defn card-border-color
-  [open?]
-  (if open?
-    (selected-ring-color)
-    "color-mix(in srgb, var(--border) 80%, transparent)"))
 
 (defn selected-card-shadow
   []
   (let [ring (selected-ring-color)]
-    (str
-     ;; visible even if parent clips outside shadows
-     "inset 0 0 0 1px color-mix(in srgb, " ring " 96%, white 4%), "
-     "inset 0 0 0 4px color-mix(in srgb, " ring " 24%, transparent), "
-
-     ;; subtle outside glow, nice when not clipped
-     "0 0 0 1px color-mix(in srgb, " ring " 70%, transparent), "
-     "0 0 22px color-mix(in srgb, " ring " 30%, transparent), "
-
-     "var(--shadow-lg)")))
+    (str "0 0 0 1px color-mix(in srgb, " ring " 92%, white 8%), "
+         "0 0 0 5px color-mix(in srgb, " ring " 30%, transparent), "
+         "0 0 34px color-mix(in srgb, " ring " 38%, transparent), "
+         "var(--shadow-lg)")))
 
 (defn card-style
   [open?]
   (compact-style
-   {:border-style "solid"
-    :border-width (if open? "2px" "1px")
-    :border-color (card-border-color open?)
+   {:position "relative"
+    :z-index (when open? "1")
+    :border-style "solid"
+    :border-width "1px"
+    :border-color (if open?
+                    (selected-ring-color)
+                    "color-mix(in srgb, var(--border) 80%, transparent)")
     :background (card-surface)
     :color "var(--foreground)"
     :box-shadow (if open?
@@ -54,9 +45,6 @@
 
 (defn item-class
   []
-  ;; Keep border-theme/radius, but do not use overflow-hidden here.
-  ;; The selected ring is mostly inset, but clipping still makes the whole card
-  ;; feel flatter.
   "radius-xl border-theme transition-all")
 
 (defn item-attrs
@@ -109,7 +97,7 @@
 
 (defn details-attrs
   []
-  ;; g/accordion-content needs raw HTML attrs under :attrs.
+  ;; g/accordion-content expects low-level HTML attrs under :attrs.
   {:class "content-stack-theme"
    :attrs {:style {:padding "0 1.25rem 1.25rem"
                    :background "transparent"
