@@ -114,8 +114,8 @@
   []
   [:div {:class "title-stack-theme text-center"}
    (g/page-title
-    {:text "Welcome to Human Help."
-     :class "text-4xl-theme"})])
+    {:text "Human Help Fast."
+     :class "text-3xl-theme py-6"})])
 
 ;; -----------------------------------------------------------------------------
 ;; Create request dialog
@@ -275,6 +275,7 @@
        {:variant :secondary
         :text (str "+" pending-open-count " new")})))])
 
+
 (defn request-toolbar-fragment
   [{:keys [ctx
            user
@@ -293,16 +294,22 @@
       {:start [(request-toolbar-heading
                 {:open-count open-count
                  :pending-open-count pending-open-count})]
-       :end [(refresh-form ctx view-state stale?)
-             (create-request-dialog
-              ctx
-              {:user user
-               :values {}
-               :errors {}
-               :open? false})]})
+       :end [(g/group
+              {:orientation :vertical
+               :wrap? false
+               :class "gap-field"
+               :attrs {:style {:align-items "flex-end"}}}
+              (refresh-form ctx view-state stale?)
+              (create-request-dialog
+               ctx
+               {:user user
+                :values {}
+                :errors {}
+                :open? false}))]})
 
      (when stale?
        (muted "New request data is available. Refresh when you are ready."))]))
+
 
 ;; -----------------------------------------------------------------------------
 ;; Search
