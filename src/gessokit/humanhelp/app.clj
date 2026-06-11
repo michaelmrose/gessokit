@@ -1,18 +1,18 @@
 (ns gessokit.humanhelp.app
   "HTTP boundary for the removable Human Help analogue app.
 
-   This namespace intentionally stays thin. It wires together:
+   This namespace is now deliberately narrower. It assembles HTTP handlers from:
 
-   - gessokit.humanhelp.model
    - gessokit.humanhelp.data
-   - gessokit.humanhelp.views
    - gessokit.humanhelp.live
-   - gessokit.client-plumbing
+   - gessokit.humanhelp.model
+   - gessokit.humanhelp.routes
+   - gessokit.humanhelp.views
 
-   The Human Help feature code is isolated under gessokit.humanhelp.* so the
-   example app can be removed cleanly from a generated template project."
+   It should not own generic Gesso Live plumbing. Human Help live panels,
+   fragment rendering, stream responses, change constructors, and toast helpers
+   are delegated to gessokit.humanhelp.live."
   (:require
-   [com.biffweb.experimental :as biffx]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.data :as data]
@@ -20,15 +20,13 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
-   [gessokit.middleware :as mid])
-  (:import
-   [java.util UUID]))
+   [gessokit.middleware :as mid]))
 
 ;; -----------------------------------------------------------------------------
-;; Request helpers
+;; Request boundary helpers
 ;; -----------------------------------------------------------------------------
 
-(defn scalar-param-value
+(defn- scalar-param-value
   "Normalize a request param value to the scalar value the app expects.
 
    Repeated browser params can arrive as vectors, for example when a form has
@@ -52,13 +50,12 @@
     :else
     x))
 
-(defn param
+(defn- param
   "Read a Ring/Biff request param by keyword or string key.
 
-   This stays in the HTTP boundary because it is a request-shape concern.
-
-   Supports plain Ring-style maps as well as common Reitit match placement.
-   Repeated params are normalized with scalar-param-value."
+   This stays here temporarily because we do not yet have a dedicated request
+   boundary/view-state namespace. It supports plain Ring-style maps as well as
+   common Reitit match placement."
   [ctx k]
   (scalar-param-value
    (or (get-in ctx [:params k])
@@ -72,117 +69,11 @@
        (get-in ctx [:reitit.core/match :path-params k])
        (get-in ctx [:reitit.core/match :path-params (name k)]))))
 
-(defn request-id
+(defn- request-id
   [ctx]
   (param ctx :request-id))
 
-;; -----------------------------------------------------------------------------
-;; Current user
-;; -----------------------------------------------------------------------------
-
-(defn session-uid
-  "Return the signed-in user's session id, when present.
-
-   Biff auth commonly stores the user id at [:session :uid]. Other keys are
-   included as tolerant fallbacks for tests/dev middleware."
-  [ctx]
-  (or (get-in ctx [:session :uid])
-      (get-in ctx [:session :user])
-      (:user/id ctx)
-      (get-in ctx [:user :xt/id])))
-
-(defn ->uuid
-  [x]
-  (cond
-    (uuid? x)
-    x
-
-    (string? x)
-    (try
-      (UUID/fromString x)
-      (catch Exception _
-        nil))
-
-    :else
-    nil))
-
-(defn emailish?
-  "True when x looks like a displayable email address rather than a UUID/id.
-
-   This is intentionally lightweight. It is not a full email validator; it just
-   prevents UUID/session ids from being used as display emails when a real email
-   is available elsewhere."
-  [x]
-  (and (string? x)
-       (re-find #"@" x)))
-
-(defn user-email-from-ctx
-  "Return a directly attached email from ctx, when one is present.
-
-   These keys cover tests, dev middleware, and common app/user shapes."
-  [ctx]
-  (some
-   (fn [x]
-     (when (emailish? x)
-       x))
-   [(:user/email ctx)
-    (:user/email (:user ctx))
-    (get-in ctx [:user :email])
-    (get-in ctx [:session :email])
-    (get-in ctx [:identity :email])
-    (get-in ctx [:params :email])
-    (get-in ctx [:params "email"])]))
-
-(defn user-email-from-db
-  "Look up the signed-in user's real email address from XTDB.
-
-   client-plumbing/current-user-email is intentionally a generic best-effort
-   helper. Human Help wants the actual user email for display, so this boundary
-   resolves it from the app's :user table when possible."
-  [ctx]
-  (let [conn (:biff/conn ctx)
-        uid  (->uuid (session-uid ctx))]
-    (when (and conn uid)
-      (try
-        (some-> (biffx/q conn
-                         {:select [:user/email]
-                          :from :user
-                          :where [:= :xt/id uid]})
-                first
-                :user/email)
-        (catch Exception _
-          nil)))))
-
-(defn current-user-email
-  "Return the email Human Help should display.
-
-   Prefer real email values from ctx/session/DB. Only fall back to the generic
-   client-plumbing display helper if no email can be found."
-  [ctx]
-  (or (user-email-from-ctx ctx)
-      (user-email-from-db ctx)
-      (client-plumbing/current-user-email ctx)))
-
-(defn current-user
-  "Return the Human Help demo user descriptor.
-
-   The demo intentionally does not enforce a real helper/helpee split, but it
-   still needs:
-   - a stable user id for ownership/client targeting
-   - the actual email for display and claim labels"
-  [ctx]
-  {:user/id (client-plumbing/current-user-id ctx)
-   :user/email (current-user-email ctx)})
-
-(defn live-system
-  [ctx]
-  (or (:gesso.live/system ctx)
-      (throw
-       (ex-info "Human Help requires :gesso.live/system in ctx."
-                {:ctx-keys (when (map? ctx)
-                             (set (keys ctx)))}))))
-
-(defn request-view-state
+(defn- request-view-state
   "Extract request-board view state from request params.
 
    Important fields:
@@ -190,16 +81,14 @@
    - :selected-request-id
    - :visible-revision
 
-   :visible-revision controls the 'new data available, click refresh' behavior.
-   A nil visible revision is normalized to the latest known revision before
-   rendering."
+   data/normalize-view-state fills defaults against the current persisted data."
   [ctx]
   {:search (or (param ctx :q) "")
    :selected-request-id (param ctx :selected)
    :visible-revision (model/parse-visible-revision
                       (param ctx :visible-revision))})
 
-(defn create-request-input
+(defn- create-request-input
   "Extract create-request form input from request params.
 
    This deliberately uses the HTTP-boundary param helper so repeated browser
@@ -211,55 +100,38 @@
     :details (param ctx :details)
     :customer-name (param ctx :customer-name)}))
 
-(defn html
-  [node]
-  (g/html-response node))
-
 ;; -----------------------------------------------------------------------------
-;; Board-state OOB
+;; Current user
 ;; -----------------------------------------------------------------------------
 
-(defn board-state-form-oob
-  "Render an OOB replacement for the board-state/search form.
+(defn- current-user
+  "Return the Human Help demo user descriptor.
 
-   This keeps the hidden selected/visible-revision state in sync after actions
-   that change board state outside the search form itself."
-  [ctx view-state]
-  (g/oob-outer-html
-   views/board-state-form-id
-   (views/search-control
-    ctx
-    {:view-state (data/normalize-view-state ctx view-state)})))
-
-(defn with-board-state-oob
-  [ctx node view-state]
-  (views/oob-response
-   ;; Put board-state first so the browser updates the hidden state before
-   ;; processing any other OOB fragments from the same response.
-   (board-state-form-oob ctx view-state)
-   node))
-
-;; -----------------------------------------------------------------------------
-;; Render helpers
-;; -----------------------------------------------------------------------------
-
-(defn page-data
+   This is intentionally small for this pass. The richer Biff/XTDB email lookup
+   from the old app.clj has been moved to app_graveyard.clj for possible later
+   extraction into model/user or auth-specific code."
   [ctx]
-  (let [user       (current-user ctx)
-        view-state (data/normalize-view-state
-                    ctx
-                    (request-view-state ctx))]
-    (merge
-     {:user user
-      :view-state view-state}
-     (app-live/page-panels view-state))))
+  {:user/id (client-plumbing/current-user-id ctx)
+   :user/email (client-plumbing/current-user-email ctx)})
 
-(defn fragment-render-options
+;; -----------------------------------------------------------------------------
+;; Live boundary
+;; -----------------------------------------------------------------------------
+
+(defn- live-system
+  [ctx]
+  (or (:gesso.live/system ctx)
+      (throw
+       (ex-info "Human Help requires :gesso.live/system in ctx."
+                {:ctx-keys (when (map? ctx)
+                             (set (keys ctx)))}))))
+
+(defn- fragment-render-options
   [ctx]
   {:user (current-user ctx)
    :view-state (request-view-state ctx)})
 
-(defn render-toolbar-node
+(defn- render-toolbar-node
   [ctx view-state]
   (app-live/render-fragment-node
    ctx
@@ -267,7 +139,7 @@
    {:user (current-user ctx)
     :view-state view-state}))
 
-(defn render-list-node
+(defn- render-list-node
   [ctx view-state]
   (app-live/render-fragment-node
    ctx
@@ -275,48 +147,82 @@
    {:user (current-user ctx)
     :view-state view-state}))
 
-(defn board-oob
+(defn- board-fragments
   [ctx view-state]
   {:toolbar (render-toolbar-node ctx view-state)
    :request-list (render-list-node ctx view-state)})
 
-(defn previous-revision
-  [revision]
-  (when (number? revision)
-    (max 0 (dec revision))))
+(defn- notify!
+  [ctx change]
+  (app-live/notify!
+   (live-system ctx)
+   ctx
+   change))
 
-(defn receiver-view-state-for-new-request
-  "Return the receiving browser's view-state for a new-request notification.
+;; -----------------------------------------------------------------------------
+;; HTML / OOB helpers
+;; -----------------------------------------------------------------------------
 
-   Normally the pending client-plumbing request includes #humanhelp-board-state,
-   so the receiving browser supplies its actual visible-revision. If that input
-   is missing for any reason, fall back to a definitely-stale visible revision
-   rather than rendering a non-glowing toolbar."
-  [ctx revision]
-  (let [view-state (request-view-state ctx)]
-    (data/normalize-view-state
-     ctx
-     (cond-> view-state
-       (nil? (:visible-revision view-state))
-       (assoc :visible-revision (previous-revision revision))))))
+(defn- html
+  [node]
+  (g/html-response node))
 
-(defn new-request-client-oob
-  "Return a client-plumbing pending fragment function for a newly-created request.
+(defn- board-state-form-oob
+  "Render an OOB replacement for the board-state/search form.
 
-   This runs at drain time using the receiving browser's ctx, so the toolbar is
-   rendered using that browser's search/selected/visible-revision state. It also
-   sends the new-request toast through the same immediate client-plumbing path."
-  [request revision]
-  (fn [receiver-ctx]
-    (let [view-state (receiver-view-state-for-new-request receiver-ctx revision)
-          toolbar    (render-toolbar-node receiver-ctx view-state)]
-      (views/oob-response
-       (views/replace-toolbar-oob toolbar)
-       (g/render-toast-oob
-        {:variant :info
-         :duration 5000
-         :title "New request received"
-         :description (app-live/request-toast-description request)})))))
+   This still lives here temporarily because views.clj does not yet expose a
+   single response-level helper for synchronizing board state. It should move
+   into views.clj during the next view-state refactor."
+  [ctx view-state]
+  (g/oob-outer-html
+   views/board-state-form-id
+   (views/search-control
+    {:view-state (data/normalize-view-state ctx view-state)})))
+
+(defn- with-board-state-oob
+  [ctx view-state & nodes]
+  (apply views/oob-response
+         ;; Put board-state first so the browser updates hidden state before
+         ;; processing any other OOB fragments from the same response.
+         (board-state-form-oob ctx view-state)
+         nodes))
+
+;; -----------------------------------------------------------------------------
+;; Page data
+;; -----------------------------------------------------------------------------
+
+(defn- page-data
+  [ctx]
+  (let [view-state (data/normalize-view-state
+                    ctx
+                    (request-view-state ctx))]
+    (merge
+     {:user (current-user ctx)
+      :view-state view-state}
+     (app-live/page-panels view-state))))
+
+;; -----------------------------------------------------------------------------
+;; Best-effort side effects
+;; -----------------------------------------------------------------------------
+
+(defn- send-new-request-toast-safely!
+  [request user]
+  (try
+    (app-live/send-new-request-toast!
+     request
+     {:actor user})
+    (catch Exception e
+      (println "[humanhelp] send-new-request-toast! failed"
+               {:message (.getMessage e)
+                :request/id (:request/id request)}))))
+
+(defn- send-reset-toast-safely!
+  []
+  (try
+    (app-live/send-reset-toast!)
+    (catch Exception e
+      (println "[humanhelp] send-reset-toast! failed"
+               {:message (.getMessage e)}))))
 
 ;; -----------------------------------------------------------------------------
 ;; Page
@@ -376,50 +282,26 @@
    (fragment-render-options ctx)))
 
 ;; -----------------------------------------------------------------------------
-;; Best-effort side effects
-;; -----------------------------------------------------------------------------
-
-(defn send-new-request-ui-safely!
-  [request revision user]
-  (try
-    (client-plumbing/send-to-scope-except-user!
-     app-live/notification-scope
-     (:user/id user)
-     (new-request-client-oob request revision))
-    (catch Exception e
-      (println "[humanhelp] send-new-request-ui! failed"
-               {:message (.getMessage e)}))))
-
-(defn send-reset-toast-safely!
-  []
-  (try
-    (app-live/send-reset-toast!)
-    (catch Exception e
-      (println "[humanhelp] send-reset-toast! failed"
-               {:message (.getMessage e)}))))
-
-;; -----------------------------------------------------------------------------
 ;; Request creation
 ;; -----------------------------------------------------------------------------
 
-(defn create-request-success-response
+(defn- create-request-success-response
   [ctx {:keys [request revision view-state]}]
-  (let [user         (current-user ctx)
-        view-state'  (assoc view-state
-                             :visible-revision revision
-                             :selected-request-id (:request/id request))
-        toolbar      (render-toolbar-node ctx view-state')
-        request-list (render-list-node ctx view-state')]
+  (let [user        (current-user ctx)
+        view-state' (assoc view-state
+                            :visible-revision revision
+                            :selected-request-id (:request/id request))
+        fragments   (board-fragments ctx view-state')]
     (html
      (with-board-state-oob
        ctx
+       view-state'
        (views/create-request-success
         ctx
-        {:user user
-         :request request
-         :toolbar toolbar
-         :request-list request-list})
-       view-state'))))
+        (merge
+         {:user user
+          :request request}
+         fragments))))))
 
 (defn create-request!
   "Create a new request from the modal dialog.
@@ -430,9 +312,9 @@
    - visible list refreshes to include the new request
 
    Other connected users:
-   - receive one immediate client-plumbing OOB response containing:
-     - new-request toast
-     - stale request toolbar with glowing refresh affordance
+   - receive the model-backed :request/created live invalidation, which wakes
+     the request toolbar only
+   - receive a new-request toast through app-live/send-new-request-toast!
    - their list does not jump until they refresh"
   [ctx]
   (let [user       (current-user ctx)
@@ -453,15 +335,14 @@
              {:user user
               :input input})]
 
-        ;; Do not emit the model-backed :request/created invalidation here.
-        ;;
-        ;; The create POST response already OOB-replaces the creator's toolbar,
-        ;; list, dialog, and board-state form at the new visible revision.
-        ;;
-        ;; Other connected users get the stale-toolbar affordance and toast via
-        ;; client plumbing, using the same immediate wake-up path that already
-        ;; delivers page-global OOB work.
-        (send-new-request-ui-safely! request revision user)
+        (notify!
+         ctx
+         (app-live/request-created-change
+          {:request request
+           :revision revision
+           :actor user}))
+
+        (send-new-request-toast-safely! request user)
 
         (create-request-success-response
          ctx
@@ -482,9 +363,9 @@
     (html
      (with-board-state-oob
        ctx
+       view-state
        (views/refreshed-request-board-fragments
-        (board-oob ctx view-state))
-       view-state))))
+        (board-fragments ctx view-state))))))
 
 (defn search-requests
   "Render the request list for a search input change."
@@ -505,14 +386,14 @@
     (html
      (with-board-state-oob
        ctx
-       (render-list-node ctx view-state)
-       view-state))))
+       view-state
+       (render-list-node ctx view-state)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request lifecycle actions
 ;; -----------------------------------------------------------------------------
 
-(defn lifecycle-action!
+(defn- lifecycle-action!
   "Shared request lifecycle action boundary.
 
    action is one of:
@@ -520,28 +401,18 @@
      :unclaim
      :take-over
      :done
-     :cancel
-
-   transition-fn receives ctx and:
-     {:request-id ...
-      :user ...}
-
-   and returns either:
-     {:status :ok ...}
-
-   or:
-     {:status :error ...}"
+     :cancel"
   [ctx action transition-fn]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
         id         (request-id ctx)
-        result     (transition-fn ctx
-                                  {:request-id id
-                                   :user user})]
+        result     (transition-fn
+                    ctx
+                    {:request-id id
+                     :user user})]
     (if (= :ok (:status result))
       (let [{:keys [request revision previous]} result]
-        (app-live/notify!
-         (live-system ctx)
+        (notify!
          ctx
          (app-live/request-transition-change
           {:action action
@@ -553,6 +424,7 @@
         (html
          (with-board-state-oob
            ctx
+           view-state
            (views/request-lifecycle-result
             (merge
              {:user user
@@ -561,8 +433,7 @@
               :previous previous
               :revision revision
               :view-state view-state}
-             (board-oob ctx view-state)))
-           view-state)))
+             (board-fragments ctx view-state))))))
 
       (html
        (views/request-action-error
@@ -618,8 +489,7 @@
         view-state (assoc (request-view-state ctx)
                           :visible-revision
                           (:revision result))]
-    (app-live/notify!
-     (live-system ctx)
+    (notify!
      ctx
      (app-live/demo-reset-change
       {:revision (:revision result)
@@ -630,13 +500,13 @@
     (html
      (with-board-state-oob
        ctx
+       view-state
        (views/reset-demo-result
         (merge
          {:user user
           :result result
           :view-state view-state}
-         (board-oob ctx view-state)))
-       view-state))))
+         (board-fragments ctx view-state)))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Module
@@ -645,6 +515,9 @@
 (def module
   {:live-rules app-live/live-rules
 
+   ;; This is still the app-level handler wiring. routes.clj owns the route
+   ;; facts/paths/URL builders; app.clj plugs those facts into concrete handler
+   ;; functions.
    :routes
    [[routes/base-path
      {:middleware [mid/wrap-signed-in]}

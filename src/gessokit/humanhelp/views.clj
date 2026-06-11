@@ -4,17 +4,17 @@
    This namespace owns Hiccup rendering only.
 
    It intentionally does not know about:
-   - atom state
    - XTDB
    - Gesso Live model compilation
    - Ring route tables
+   - lifecycle mutation
 
-   Data comes in from app/live/store boundary namespaces."
+   Data comes in from app/live/model boundary namespaces."
   (:require
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.components.request-card.core :refer [request-card]]
    [gessokit.humanhelp.components.refresh-button.core :refer [refresh-button]]
+   [gessokit.humanhelp.components.request-card.core :refer [request-card]]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.ui :as ui]))
@@ -75,6 +75,15 @@
              :name name
              :value value}]))
 
+(defn hidden-input-present
+  "Render a hidden input even when value is blank.
+
+   Useful for inputs that client-side behavior writes into by selector."
+  [name value]
+  [:input {:type "hidden"
+           :name name
+           :value (or value "")}])
+
 (defn view-state-hidden-inputs
   "Render full view-state hidden inputs.
 
@@ -98,7 +107,7 @@
    Gesso accordion state-sync script needs a stable input to write into."
   [{:keys [selected-request-id visible-revision]}]
   [:div {:style {:display "contents"}}
-   (hidden-input routes/selected-param (or selected-request-id ""))
+   (hidden-input-present routes/selected-param selected-request-id)
    (hidden-input routes/visible-revision-param visible-revision)])
 
 (defn oob-response
@@ -244,12 +253,12 @@
 (defn refresh-form
   [ctx view-state stale?]
   (g/form
-    ctx
-    {:post (routes/refresh-requests-url)
-     :swap "none"
-     :inline? true
-     :attrs {:hx-include (board-state-selector)}}
-    (refresh-button {:stale? stale?})))
+   ctx
+   {:post (routes/refresh-requests-url)
+    :swap "none"
+    :inline? true
+    :attrs {:hx-include (board-state-selector)}}
+   (refresh-button {:stale? stale?})))
 
 (defn request-toolbar-heading
   [{:keys [open-count pending-open-count]}]
@@ -274,7 +283,6 @@
       (g/badge
        {:variant :secondary
         :text (str "+" pending-open-count " new")})))])
-
 
 (defn request-toolbar-fragment
   [{:keys [ctx
@@ -310,9 +318,8 @@
      (when stale?
        (muted "New request data is available. Refresh when you are ready."))]))
 
-
 ;; -----------------------------------------------------------------------------
-;; Search
+;; Search / board-state form
 ;; -----------------------------------------------------------------------------
 
 (defn search-control
@@ -421,8 +428,8 @@
    {:user user}
 
    (client-plumbing/listener
-     ctx
-     {:trigger-attrs {:hx-include (board-state-selector)}})
+    ctx
+    {:trigger-attrs {:hx-include (board-state-selector)}})
 
    (ui/container
     [:div {:class "content-stack-theme gap-section"}
@@ -435,7 +442,7 @@
        :request-list-panel request-list-panel})])))
 
 ;; -----------------------------------------------------------------------------
-;; OOB / action result views
+;; OOB / response helpers
 ;; -----------------------------------------------------------------------------
 
 (defn replace-toolbar-oob
@@ -449,6 +456,28 @@
 (defn replace-dialog-oob
   [dialog]
   (g/oob-outer-html create-request-dialog-id dialog))
+
+(defn replace-board-state-oob
+  "Render an OOB replacement for the stable board-state/search form.
+
+   The app should use this whenever a response changes selected request or
+   visible revision outside the search form itself."
+  ([view-state]
+   (replace-board-state-oob nil view-state))
+  ([ctx view-state]
+   (g/oob-outer-html
+    board-state-form-id
+    (search-control ctx {:view-state view-state}))))
+
+(defn with-board-state-oob
+  "Wrap nodes with a board-state OOB replacement first.
+
+   Putting board-state first means the browser updates hidden state before
+   processing other OOB fragments from the same response."
+  [ctx view-state & nodes]
+  (apply oob-response
+         (replace-board-state-oob ctx view-state)
+         nodes))
 
 (defn fragments-oob
   [{:keys [toolbar request-list]}]

@@ -1,7 +1,8 @@
 (ns gessokit.humanhelp.live
   "Model-backed Gesso Live wiring for the Human Help analogue.
 
-   This namespace owns:
+   This namespace owns the Human Help adapter over gesso.live:
+
    - the compiled live model
    - live scopes
    - invalidation graph
@@ -13,7 +14,10 @@
    - Human Help notification/toast helpers
    - notification helper
 
-   Generic connected-browser/OOB mechanics live in gessokit.client-plumbing.
+   Generic live/SSE/model-fragment mechanics live in gesso.live.*.
+
+   Generic connected-browser/page-global OOB mechanics live in
+   gessokit.client-plumbing.
 
    Important load-boundary rule:
    this namespace must not statically require gessokit.humanhelp.views.
@@ -25,7 +29,6 @@
    [gesso.core :as g]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]))
 
@@ -65,7 +68,7 @@
 
 (defn- normalized-render-view-state
   [ctx]
-  (data/normalize-view-state
+  (model/normalize-view-state
    ctx
    (render-view-state ctx)))
 
@@ -123,7 +126,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (data/toolbar-data ctx view-state)
+     (model/toolbar-data ctx view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))
@@ -132,7 +135,7 @@
   [ctx id]
   (let [view-state (normalized-render-view-state ctx)]
     (merge
-     (data/board-data ctx view-state)
+     (model/board-data ctx view-state)
      {:ctx ctx
       :store/id id
       :user (render-user ctx)})))
@@ -454,7 +457,7 @@
    exclude-user-id is supplied, clients owned by that user are excluded. This
    avoids showing the creator both:
    - the local create-success toast
-   - the broadcast \"New request received\" toast"
+   - the broadcast \"New request received\" toast."
   ([request]
    (send-new-request-toast! request {}))
   ([request {:keys [actor exclude-user-id]}]

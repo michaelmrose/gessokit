@@ -1,14 +1,16 @@
 (ns gessokit.humanhelp.routes
-  "Route constants and URL builders for the Human Help analogue.
+  "Route constants, route specs, route binding, and URL builders for the Human
+   Help analogue.
 
-   This namespace is intentionally small and dependency-light.
+   This namespace is intentionally dependency-light.
 
    It exists so:
    - views can generate hx-get/hx-post URLs
    - live can generate fragment and stream URLs
-   - app.clj can define the matching Reitit route table
+   - app.clj can bind route ids to concrete handler functions
 
-   without duplicating string literals across the feature."
+   routes.clj owns route facts.
+   app.clj owns handler functions."
   (:require
    [clojure.string :as str])
   (:import
@@ -22,8 +24,16 @@
 (def base-path
   "/app")
 
+;; Compatibility only. Prefer gessokit.humanhelp.model/store-id for domain code.
 (def store-id
   "demo-store")
+
+;; -----------------------------------------------------------------------------
+;; Route param names
+;; -----------------------------------------------------------------------------
+
+(def request-id-param
+  "request-id")
 
 ;; -----------------------------------------------------------------------------
 ;; Query/view-state parameter names
@@ -38,9 +48,68 @@
 (def visible-revision-param
   "visible-revision")
 
+;; Later:
+;; (def show-terminal-param
+;;   "show-terminal")
+
+;; -----------------------------------------------------------------------------
+;; Route ids
+;; -----------------------------------------------------------------------------
+
+(def page-id
+  :humanhelp/page)
+
+(def request-toolbar-fragment-id
+  :humanhelp/request-toolbar-fragment)
+
+(def request-list-fragment-id
+  :humanhelp/request-list-fragment)
+
+(def create-request-dialog-fragment-id
+  :humanhelp/create-request-dialog-fragment)
+
+(def request-toolbar-stream-id
+  :humanhelp/request-toolbar-stream)
+
+(def request-list-stream-id
+  :humanhelp/request-list-stream)
+
+(def create-request-id
+  :humanhelp/create-request)
+
+(def refresh-requests-id
+  :humanhelp/refresh-requests)
+
+(def search-requests-id
+  :humanhelp/search-requests)
+
+(def select-request-id
+  :humanhelp/select-request)
+
+(def claim-request-id
+  :humanhelp/claim-request)
+
+(def unclaim-request-id
+  :humanhelp/unclaim-request)
+
+(def take-over-request-id
+  :humanhelp/take-over-request)
+
+(def done-request-id
+  :humanhelp/done-request)
+
+(def cancel-request-id
+  :humanhelp/cancel-request)
+
+(def reset-demo-id
+  :humanhelp/reset-demo)
+
 ;; -----------------------------------------------------------------------------
 ;; Relative route fragments for Reitit nesting under base-path
 ;; -----------------------------------------------------------------------------
+
+(def page-route
+  "")
 
 (def request-toolbar-fragment-route
   "/fragments/request-toolbar")
@@ -88,6 +157,145 @@
   "/demo/reset")
 
 ;; -----------------------------------------------------------------------------
+;; Route specs
+;; -----------------------------------------------------------------------------
+
+(def route-specs
+  [{:id page-id
+    :method :get
+    :route page-route}
+
+   {:id request-toolbar-fragment-id
+    :method :get
+    :route request-toolbar-fragment-route}
+
+   {:id request-list-fragment-id
+    :method :get
+    :route request-list-fragment-route}
+
+   {:id create-request-dialog-fragment-id
+    :method :get
+    :route create-request-dialog-fragment-route}
+
+   {:id request-toolbar-stream-id
+    :method :get
+    :route request-toolbar-stream-route}
+
+   {:id request-list-stream-id
+    :method :get
+    :route request-list-stream-route}
+
+   {:id create-request-id
+    :method :post
+    :route create-request-route}
+
+   {:id refresh-requests-id
+    :method :post
+    :route refresh-requests-route}
+
+   {:id search-requests-id
+    :method :get
+    :route search-requests-route}
+
+   {:id select-request-id
+    :method :get
+    :route select-request-route}
+
+   {:id claim-request-id
+    :method :post
+    :route claim-request-route}
+
+   {:id unclaim-request-id
+    :method :post
+    :route unclaim-request-route}
+
+   {:id take-over-request-id
+    :method :post
+    :route take-over-request-route}
+
+   {:id done-request-id
+    :method :post
+    :route done-request-route}
+
+   {:id cancel-request-id
+    :method :post
+    :route cancel-request-route}
+
+   {:id reset-demo-id
+    :method :post
+    :route reset-demo-route}])
+
+(def route-spec-by-id
+  (into {}
+        (map (juxt :id identity))
+        route-specs))
+
+(defn route-spec
+  [route-id]
+  (or (get route-spec-by-id route-id)
+      (throw
+       (ex-info "Unknown Human Help route id."
+                {:route-id route-id
+                 :known-route-ids (set (keys route-spec-by-id))}))))
+
+;; -----------------------------------------------------------------------------
+;; Handler binding
+;; -----------------------------------------------------------------------------
+
+(defn- handler-for!
+  [handlers {:keys [id method route] :as spec}]
+  (or (get handlers id)
+      (throw
+       (ex-info "Missing Human Help route handler."
+                {:route-id id
+                 :method method
+                 :route route
+                 :spec spec
+                 :handler-ids (set (keys handlers))}))))
+
+(defn- route-entry
+  [handlers {:keys [method route] :as spec}]
+  [route {method (handler-for! handlers spec)}])
+
+(defn route-table
+  "Return a Reitit route table for Human Help.
+
+   handlers is a map of route id -> handler function.
+
+   Example:
+
+     (routes/route-table
+       {routes/page-id app-page
+        routes/request-list-fragment-id request-list-fragment}
+       {:middleware [mid/wrap-signed-in]})
+
+   routes.clj owns route facts. app.clj owns the handler map and middleware."
+  ([handlers]
+   (route-table handlers nil))
+  ([handlers {:keys [middleware]}]
+   [[base-path
+     (cond-> {}
+       (seq middleware)
+       (assoc :middleware middleware))
+
+     (route-entry handlers (route-spec page-id))
+     (route-entry handlers (route-spec request-toolbar-fragment-id))
+     (route-entry handlers (route-spec request-list-fragment-id))
+     (route-entry handlers (route-spec create-request-dialog-fragment-id))
+     (route-entry handlers (route-spec request-toolbar-stream-id))
+     (route-entry handlers (route-spec request-list-stream-id))
+     (route-entry handlers (route-spec create-request-id))
+     (route-entry handlers (route-spec refresh-requests-id))
+     (route-entry handlers (route-spec search-requests-id))
+     (route-entry handlers (route-spec select-request-id))
+     (route-entry handlers (route-spec claim-request-id))
+     (route-entry handlers (route-spec unclaim-request-id))
+     (route-entry handlers (route-spec take-over-request-id))
+     (route-entry handlers (route-spec done-request-id))
+     (route-entry handlers (route-spec cancel-request-id))
+     (route-entry handlers (route-spec reset-demo-id))]]))
+
+;; -----------------------------------------------------------------------------
 ;; URL helpers
 ;; -----------------------------------------------------------------------------
 
@@ -102,7 +310,9 @@
 
 (defn- encode
   [x]
-  (URLEncoder/encode (str x) StandardCharsets/UTF_8))
+  (URLEncoder/encode
+   (str x)
+   (.name StandardCharsets/UTF_8)))
 
 (defn- present?
   [x]
