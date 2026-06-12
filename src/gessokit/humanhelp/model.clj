@@ -1,8 +1,7 @@
 (ns gessokit.humanhelp.model
   "Human Help domain, view-state, and XTDB-backed persistence boundary.
 
-   This namespace now owns the removable Human Help demo's core model/service
-   behavior:
+   This namespace owns the removable Human Help demo's model/service behavior:
 
    - request statuses
    - Malli schemas
@@ -117,7 +116,7 @@
   "Read a param map by keyword or string key.
 
    This helper is pure and can be used by app.clj before passing normalized
-   values into the rest of the domain."
+   values into the rest of the model."
   [params k]
   (or (get params k)
       (get params (name k))))
@@ -133,8 +132,8 @@
 (defn parse-visible-revision
   "Parse a visible revision token from request params.
 
-   nil means no committed visible revision was supplied. The caller may treat
-   nil as \"latest\" for initial page loads."
+   nil means no committed visible revision was supplied. Callers may treat nil
+   as latest for initial page loads."
   [x]
   (parse-long-value x))
 

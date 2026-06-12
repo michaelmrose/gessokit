@@ -1,9 +1,8 @@
 (ns gessokit.humanhelp.app
   "HTTP boundary for the removable Human Help analogue app.
 
-   This namespace is now deliberately narrower. It assembles HTTP handlers from:
+   This namespace assembles HTTP handlers from:
 
-   - gessokit.humanhelp.data
    - gessokit.humanhelp.live
    - gessokit.humanhelp.model
    - gessokit.humanhelp.routes
@@ -11,16 +10,23 @@
 
    It should not own generic Gesso Live plumbing. Human Help live panels,
    fragment rendering, stream responses, change constructors, and toast helpers
-   are delegated to gessokit.humanhelp.live."
+   are delegated to gessokit.humanhelp.live.
+
+   It should not own Hiccup/OOB response shape beyond choosing which view helper
+   to return. Board-state OOB rendering is delegated to views.clj."
   (:require
+   [com.biffweb.experimental :as biffx]
+   [clojure.string :as str]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
-   [gessokit.humanhelp.data :as data]
    [gessokit.humanhelp.live :as app-live]
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]
    [gessokit.humanhelp.views :as views]
-   [gessokit.middleware :as mid]))
+   [gessokit.middleware :as mid])
+  (:import
+   [java.util UUID])
+  )
 
 ;; -----------------------------------------------------------------------------
 ;; Request boundary helpers
@@ -81,12 +87,17 @@
    - :selected-request-id
    - :visible-revision
 
-   data/normalize-view-state fills defaults against the current persisted data."
+   model/normalize-view-state fills defaults against the current persisted
+   Human Help state."
   [ctx]
   {:search (or (param ctx :q) "")
    :selected-request-id (param ctx :selected)
    :visible-revision (model/parse-visible-revision
                       (param ctx :visible-revision))})
+
+(defn- normalized-view-state
+  [ctx view-state]
+  (model/normalize-view-state ctx view-state))
 
 (defn- create-request-input
   "Extract create-request form input from request params.
@@ -104,15 +115,72 @@
 ;; Current user
 ;; -----------------------------------------------------------------------------
 
-(defn- current-user
-  "Return the Human Help demo user descriptor.
-
-   This is intentionally small for this pass. The richer Biff/XTDB email lookup
-   from the old app.clj has been moved to app_graveyard.clj for possible later
-   extraction into model/user or auth-specific code."
+(defn- session-uid
+  "Return the signed-in user's session id, when present."
   [ctx]
-  {:user/id (client-plumbing/current-user-id ctx)
-   :user/email (client-plumbing/current-user-email ctx)})
+  (or (get-in ctx [:session :uid])
+      (get-in ctx [:session :user])
+      (:user/id ctx)
+      (get-in ctx [:user :xt/id])))
+
+(defn- ->uuid
+  [x]
+  (cond
+    (uuid? x)
+    x
+
+    (string? x)
+    (try
+      (UUID/fromString x)
+      (catch Exception _
+        nil))
+
+    :else
+    nil))
+
+(defn- emailish?
+  [x]
+  (and (string? x)
+       (str/includes? x "@")))
+
+(defn- user-email-from-ctx
+  [ctx]
+  (some
+   (fn [x]
+     (when (emailish? x)
+       x))
+   [(:user/email ctx)
+    (:user/email (:user ctx))
+    (get-in ctx [:user :email])
+    (get-in ctx [:session :email])
+    (get-in ctx [:identity :email])]))
+
+(defn- user-email-from-db
+  [ctx]
+  (let [conn (:biff/conn ctx)
+        uid  (->uuid (session-uid ctx))]
+    (when (and conn uid)
+      (try
+        (some-> (biffx/q conn
+                         {:select [:user/email]
+                          :from :user
+                          :where [:= :xt/id uid]})
+                first
+                :user/email)
+        (catch Exception _
+          nil)))))
+
+(defn- current-user-email
+  "Return only a real display email, never a UUID/id fallback."
+  [ctx]
+  (or (user-email-from-ctx ctx)
+      (user-email-from-db ctx)))
+
+(defn- current-user
+  [ctx]
+  (cond-> {:user/id (client-plumbing/current-user-id ctx)}
+    (current-user-email ctx)
+    (assoc :user/email (current-user-email ctx))))
 
 ;; -----------------------------------------------------------------------------
 ;; Live boundary
@@ -167,33 +235,20 @@
   [node]
   (g/html-response node))
 
-(defn- board-state-form-oob
-  "Render an OOB replacement for the board-state/search form.
-
-   This still lives here temporarily because views.clj does not yet expose a
-   single response-level helper for synchronizing board state. It should move
-   into views.clj during the next view-state refactor."
-  [ctx view-state]
-  (g/oob-outer-html
-   views/board-state-form-id
-   (views/search-control
-    {:view-state (data/normalize-view-state ctx view-state)})))
-
 (defn- with-board-state-oob
   [ctx view-state & nodes]
-  (apply views/oob-response
-         ;; Put board-state first so the browser updates hidden state before
-         ;; processing any other OOB fragments from the same response.
-         (board-state-form-oob ctx view-state)
+  (apply views/with-board-state-oob
+         ctx
+         (normalized-view-state ctx view-state)
          nodes))
 
 ;; -----------------------------------------------------------------------------
-;; Page data
+;; Page props
 ;; -----------------------------------------------------------------------------
 
-(defn- page-data
+(defn- page-props
   [ctx]
-  (let [view-state (data/normalize-view-state
+  (let [view-state (normalized-view-state
                     ctx
                     (request-view-state ctx))]
     (merge
@@ -231,7 +286,7 @@
 (defn app-page
   "Render /app."
   [ctx]
-  (views/page ctx (page-data ctx)))
+  (views/page ctx (page-props ctx)))
 
 ;; -----------------------------------------------------------------------------
 ;; Fragment handlers
@@ -315,7 +370,7 @@
    - receive the model-backed :request/created live invalidation, which wakes
      the request toolbar only
    - receive a new-request toast through app-live/send-new-request-toast!
-   - their list does not jump until they refresh"
+   - their list does not jump until they refresh."
   [ctx]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
@@ -330,7 +385,7 @@
          :errors errors}))
 
       (let [{:keys [request revision]}
-            (data/create-request!
+            (model/create-request!
              ctx
              {:user user
               :input input})]
@@ -359,7 +414,7 @@
   [ctx]
   (let [view-state (assoc (request-view-state ctx)
                           :visible-revision
-                          (data/latest-revision ctx))]
+                          (model/latest-revision ctx))]
     (html
      (with-board-state-oob
        ctx
@@ -448,35 +503,35 @@
   (lifecycle-action!
    ctx
    :claim
-   data/claim-request!))
+   model/claim-request!))
 
 (defn unclaim-request!
   [ctx]
   (lifecycle-action!
    ctx
    :unclaim
-   data/unclaim-request!))
+   model/unclaim-request!))
 
 (defn take-over-request!
   [ctx]
   (lifecycle-action!
    ctx
    :take-over
-   data/take-over-request!))
+   model/take-over-request!))
 
 (defn mark-request-done!
   [ctx]
   (lifecycle-action!
    ctx
    :done
-   data/mark-request-done!))
+   model/mark-request-done!))
 
 (defn cancel-request!
   [ctx]
   (lifecycle-action!
    ctx
    :cancel
-   data/cancel-request!))
+   model/cancel-request!))
 
 ;; -----------------------------------------------------------------------------
 ;; Dev/demo reset
@@ -485,7 +540,7 @@
 (defn reset-demo!
   [ctx]
   (let [user       (current-user ctx)
-        result     (data/reset-demo-state! ctx)
+        result     (model/reset-demo-state! ctx)
         view-state (assoc (request-view-state ctx)
                           :visible-revision
                           (:revision result))]
@@ -509,68 +564,38 @@
          (board-fragments ctx view-state)))))))
 
 ;; -----------------------------------------------------------------------------
+;; Route handler map
+;; -----------------------------------------------------------------------------
+
+(def handlers
+  {routes/page-id app-page
+
+   routes/request-toolbar-fragment-id request-toolbar-fragment
+   routes/request-list-fragment-id request-list-fragment
+   routes/create-request-dialog-fragment-id create-request-dialog-fragment
+
+   routes/request-toolbar-stream-id request-toolbar-stream
+   routes/request-list-stream-id request-list-stream
+
+   routes/create-request-id create-request!
+   routes/refresh-requests-id refresh-requests!
+   routes/search-requests-id search-requests
+   routes/select-request-id select-request
+
+   routes/claim-request-id claim-request!
+   routes/unclaim-request-id unclaim-request!
+   routes/take-over-request-id take-over-request!
+   routes/done-request-id mark-request-done!
+   routes/cancel-request-id cancel-request!
+
+   routes/reset-demo-id reset-demo!})
+
+;; -----------------------------------------------------------------------------
 ;; Module
 ;; -----------------------------------------------------------------------------
 
 (def module
   {:live-rules app-live/live-rules
-
-   ;; This is still the app-level handler wiring. routes.clj owns the route
-   ;; facts/paths/URL builders; app.clj plugs those facts into concrete handler
-   ;; functions.
-   :routes
-   [[routes/base-path
-     {:middleware [mid/wrap-signed-in]}
-
-     ;; Main app page
-     ["" {:get app-page}]
-
-     ;; Fragments
-     [routes/request-toolbar-fragment-route
-      {:get request-toolbar-fragment}]
-
-     [routes/request-list-fragment-route
-      {:get request-list-fragment}]
-
-     [routes/create-request-dialog-fragment-route
-      {:get create-request-dialog-fragment}]
-
-     ;; Streams
-     [routes/request-toolbar-stream-route
-      {:get request-toolbar-stream}]
-
-     [routes/request-list-stream-route
-      {:get request-list-stream}]
-
-     ;; Request creation and visible-list controls
-     [routes/create-request-route
-      {:post create-request!}]
-
-     [routes/refresh-requests-route
-      {:post refresh-requests!}]
-
-     [routes/search-requests-route
-      {:get search-requests}]
-
-     [routes/select-request-route
-      {:get select-request}]
-
-     ;; Request lifecycle actions
-     [routes/claim-request-route
-      {:post claim-request!}]
-
-     [routes/unclaim-request-route
-      {:post unclaim-request!}]
-
-     [routes/take-over-request-route
-      {:post take-over-request!}]
-
-     [routes/done-request-route
-      {:post mark-request-done!}]
-
-     [routes/cancel-request-route
-      {:post cancel-request!}]
-
-     ;; Dev/demo reset
-     [routes/reset-demo-route
-      {:post reset-demo!}]]]})
+   :routes (routes/route-table
+            handlers
+            {:middleware [mid/wrap-signed-in]})})

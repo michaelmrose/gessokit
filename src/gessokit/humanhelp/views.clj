@@ -11,6 +11,7 @@
 
    Data comes in from app/live/model boundary namespaces."
   (:require
+   [clojure.string :as str]
    [gesso.core :as g]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.components.refresh-button.core :refer [refresh-button]]
@@ -56,10 +57,21 @@
 ;; -----------------------------------------------------------------------------
 ;; Small helpers
 ;; -----------------------------------------------------------------------------
+(defn user-email
+  "Return a real display email for a Human Help user map.
+
+   Do not treat :user/id as an email. If this returns nil, the caller does not
+   currently have a displayable email address."
+  [user]
+  (let [email (:user/email user)]
+    (when (and (string? email)
+               (str/includes? email "@"))
+      email)))
 
 (defn account-email
+  "Backward-compatible name for create-request form defaults."
   [user]
-  (:user/email user))
+  (user-email user))
 
 (defn muted
   [text]

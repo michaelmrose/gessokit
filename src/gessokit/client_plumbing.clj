@@ -1,7 +1,7 @@
 (ns gessokit.client-plumbing
   "App-owned adapter for connected-client OOB delivery.
 
-   This namespace owns generic app policy around connected browser clients:
+   This namespace owns app policy around connected browser clients:
 
    - route placement
    - middleware
@@ -10,6 +10,17 @@
    - response wrapping
    - app-friendly OOB send helpers
    - generic toast helpers
+
+   It intentionally does not own:
+
+   - connected-client storage
+   - browser client id generation
+   - SSE listener mechanics
+   - SSE stream lifecycle
+   - pending OOB queues
+   - low-level target delivery
+
+   Those generic mechanics live in gesso.live.client.
 
    Feature-specific notification wording belongs in feature namespaces, e.g.
    gessokit.humanhelp.live."
@@ -90,8 +101,8 @@
   [ctx]
   (let [user-id (current-user-id ctx)]
     {:client/user-id user-id
-     :client/scopes  #{(user-scope user-id)
-                       app-scope}}))
+     :client/scopes #{(user-scope user-id)
+                      app-scope}}))
 
 ;; -----------------------------------------------------------------------------
 ;; Channel
@@ -114,11 +125,12 @@
 ;; -----------------------------------------------------------------------------
 ;; Browser listener
 ;; -----------------------------------------------------------------------------
-;; -----------------------------------------------------------------------------
-;; Browser listener
-;; -----------------------------------------------------------------------------
 
 (defn new-client-id
+  "Return a new opaque browser client id.
+
+   This is a convenience wrapper for tests/dev code. Normal callers should use
+   listener and let it allocate the id."
   []
   (live-client/new-client-id))
 
@@ -193,7 +205,7 @@
 ;; -----------------------------------------------------------------------------
 
 (defn send!
- "Send arbitrary OOB fragments to a target.
+  "Send arbitrary OOB fragments to a target.
 
    Target forms:
      :all
@@ -249,49 +261,29 @@
 (defn client-user-id
   "Return the normalized user id from a connected-client descriptor.
 
-   The primary shape is the descriptor returned by current-client:
-     {:client/user-id ...
-      :client/scopes ...}
-
-   Extra fallbacks make this helper tolerant of small live-client storage-shape
-   changes."
+   The descriptor shape is produced by current-client and stored by
+   gesso.live.client."
   [client]
-  (some-> (or (:client/user-id client)
-              (:user-id client)
-              (get-in client [:client :user-id]))
-          str))
+  (some-> (:client/user-id client) str))
 
 (defn client-scopes
   "Return the scope set from a connected-client descriptor."
   [client]
-  (set
-   (or (:client/scopes client)
-       (:scopes client)
-       (get-in client [:client :scopes])
-       #{})))
+  (set (:client/scopes client)))
 
 (defn client-in-scope?
   [scope client]
   (contains? (client-scopes client) scope))
 
 (defn target-client-ids-for-scope-except-user
-  "Return connected client ids in scope, excluding all clients owned by user-id."
+  "Return connected client ids in scope, excluding all clients owned by user-id.
+
+   This is app policy layered over gesso.live.client introspection. The generic
+   live-client target forms intentionally stay simple; this adapter composes
+   scope membership with app identity."
   [scope user-id]
   (let [excluded-user-id (some-> user-id str)]
     (->> (live-client/connected-clients channel)
-         (keep
-          (fn [[client-id client]]
-            (when (and (client-in-scope? scope client)
-                       (not= excluded-user-id
-                             (client-user-id client)))
-              client-id)))
-         vec)))
-
-#_(defn target-client-ids-for-scope-except-user
-  "Return connected client ids in scope, excluding all clients owned by user-id."
-  [scope user-id]
-  (let [excluded-user-id (some-> user-id str)]
-    (->> (live-client/connected-clients)
          (keep
           (fn [[client-id client]]
             (when (and (client-in-scope? scope client)
