@@ -25,8 +25,7 @@
    [gessokit.humanhelp.views :as views]
    [gessokit.middleware :as mid])
   (:import
-   [java.util UUID])
-  )
+   [java.util UUID]))
 
 ;; -----------------------------------------------------------------------------
 ;; Request boundary helpers
@@ -178,9 +177,10 @@
 
 (defn- current-user
   [ctx]
-  (cond-> {:user/id (client-plumbing/current-user-id ctx)}
-    (current-user-email ctx)
-    (assoc :user/email (current-user-email ctx))))
+  (let [email (current-user-email ctx)]
+    (cond-> {:user/id (client-plumbing/current-user-id ctx)}
+      email
+      (assoc :user/email email))))
 
 ;; -----------------------------------------------------------------------------
 ;; Live boundary
@@ -257,17 +257,63 @@
      (app-live/page-panels view-state))))
 
 ;; -----------------------------------------------------------------------------
-;; Best-effort side effects
+;; Receiver-specific connected-client side effects
 ;; -----------------------------------------------------------------------------
 
-(defn- send-new-request-toast-safely!
-  [request user]
+(defn- previous-revision
+  [revision]
+  (when (number? revision)
+    (max 0 (dec revision))))
+
+(defn- receiver-view-state-for-new-request
+  "Return the receiving browser's view-state for a new-request notification.
+
+   The pending client-plumbing request normally includes #humanhelp-board-state,
+   so this uses the receiver browser's own q/selected/visible-revision state.
+
+   If visible-revision is absent, fall back to a definitely-stale revision so
+   the receiver gets the stale toolbar affordance instead of accidentally
+   rendering as current."
+  [ctx revision]
+  (let [view-state (request-view-state ctx)]
+    (normalized-view-state
+     ctx
+     (cond-> view-state
+       (nil? (:visible-revision view-state))
+       (assoc :visible-revision (previous-revision revision))))))
+
+(defn- new-request-client-oob
+  "Return a receiver-specific pending fragment for a newly-created request.
+
+   This renders only observer UI:
+   - stale toolbar/count/refresh affordance
+   - new-request toast
+
+   It deliberately does not replace the request list. Observers should not have
+   their visible list jump on another user's create."
+  [request revision]
+  (fn [receiver-ctx]
+    (let [view-state (receiver-view-state-for-new-request
+                      receiver-ctx
+                      revision)
+          toolbar    (render-toolbar-node receiver-ctx view-state)]
+      (views/oob-response
+       (views/replace-toolbar-oob toolbar)
+       (g/render-toast-oob
+        {:variant :info
+         :duration 5000
+         :title "New request received"
+         :description (app-live/request-toast-description request)})))))
+
+(defn- send-new-request-ui-safely!
+  [request revision user]
   (try
-    (app-live/send-new-request-toast!
-     request
-     {:actor user})
+    (client-plumbing/send-to-scope-except-user!
+     app-live/notification-scope
+     (:user/id user)
+     (new-request-client-oob request revision))
     (catch Exception e
-      (println "[humanhelp] send-new-request-toast! failed"
+      (println "[humanhelp] send-new-request-ui! failed"
                {:message (.getMessage e)
                 :request/id (:request/id request)}))))
 
@@ -341,6 +387,17 @@
 ;; -----------------------------------------------------------------------------
 
 (defn- create-request-success-response
+  "Return the creator's authoritative post-create board update.
+
+   This is the refresh-equivalent actor path:
+   - advance visible-revision to the create revision
+   - select the newly-created request
+   - render toolbar from the model
+   - render list from the model
+   - close/reset the dialog through views/create-request-success
+
+   This is intentionally synchronous in the POST response so it cannot race a
+   separate client-side refresh request."
   [ctx {:keys [request revision view-state]}]
   (let [user        (current-user ctx)
         view-state' (assoc view-state
@@ -364,13 +421,17 @@
    Creator behavior:
    - request is created
    - dialog closes
-   - visible list refreshes to include the new request
+   - visible list refreshes immediately to include the new request
+   - visible revision advances to the create revision
 
    Other connected users:
-   - receive the model-backed :request/created live invalidation, which wakes
-     the request toolbar only
-   - receive a new-request toast through app-live/send-new-request-toast!
-   - their list does not jump until they refresh."
+   - receive receiver-specific connected-client OOB, excluding the creator
+   - see stale toolbar/count/toast
+   - their list does not jump until they refresh.
+
+   Important: create does not submit the model-backed :request/created live
+   invalidation. That live graph wakes toolbar only, which is observer behavior
+   and can race the creator's POST response."
   [ctx]
   (let [user       (current-user ctx)
         view-state (request-view-state ctx)
@@ -390,14 +451,10 @@
              {:user user
               :input input})]
 
-        (notify!
-         ctx
-         (app-live/request-created-change
-          {:request request
-           :revision revision
-           :actor user}))
-
-        (send-new-request-toast-safely! request user)
+        (send-new-request-ui-safely!
+         request
+         revision
+         user)
 
         (create-request-success-response
          ctx

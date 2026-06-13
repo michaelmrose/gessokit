@@ -2,6 +2,7 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
+   [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.app :as app]
    [gessokit.humanhelp.live :as app-live]
    [gessokit.humanhelp.model :as model]
@@ -304,7 +305,6 @@
 ;; -----------------------------------------------------------------------------
 ;; Side-effect recorders
 ;; -----------------------------------------------------------------------------
-
 (defn notify-recorder
   [calls]
   (fn [& args]
@@ -312,6 +312,12 @@
     {:submitted true}))
 
 (defn request-toast-recorder
+  [calls]
+  (fn [& args]
+    (swap! calls conj args)
+    {:sent 1}))
+
+(defn client-send-except-user-recorder
   [calls]
   (fn [& args]
     (swap! calls conj args)
@@ -329,10 +335,15 @@
      ~@body))
 
 (defmacro with-create-side-effect-recorders
-  [notify-calls request-toasts & body]
-  `(with-redefs [app-live/notify! (notify-recorder ~notify-calls)
+  [notify-calls request-toasts client-sends & body]
+  `(with-redefs [app-live/notify!
+                 (notify-recorder ~notify-calls)
+
                  app-live/send-new-request-toast!
-                 (request-toast-recorder ~request-toasts)]
+                 (request-toast-recorder ~request-toasts)
+
+                 client-plumbing/send-to-scope-except-user!
+                 (client-send-except-user-recorder ~client-sends)]
      ~@body))
 
 (defmacro with-reset-side-effect-recorders
@@ -345,15 +356,17 @@
 (defn create-request-through-route!
   [ctx params]
   (let [notify-calls (atom [])
-        request-toasts (atom [])]
-    (with-create-side-effect-recorders notify-calls request-toasts
+        request-toasts (atom [])
+        client-sends (atom [])]
+    (with-create-side-effect-recorders notify-calls request-toasts client-sends
       {:response (endpoint!
                   :post
                   routes/create-request-route
                   ctx
                   {:params params})
        :notify-calls @notify-calls
-       :request-toasts @request-toasts})))
+       :request-toasts @request-toasts
+       :client-sends @client-sends})))
 
 (defn refresh-through-route!
   [ctx params]
@@ -479,7 +492,7 @@
 ;; -----------------------------------------------------------------------------
 
 (deftest create-request-valid-flow-test
-  (testing "valid mounted create route mutates store, emits live change, sends toast, and returns OOB"
+  (testing "valid mounted create route mutates store, sends observer UI, and returns creator-refresh OOB"
     (let [ctx (base-ctx)
           before-revision (model/latest-revision ctx)
           before-count (count (model/all-requests ctx))
@@ -494,6 +507,7 @@
           created (request-by-title ctx title)
           latest (model/latest-revision ctx)]
       (assert-fragment-or-oob-response response)
+
       (is created)
       (is (= (inc before-count) (count (model/all-requests ctx))))
       (is (= (inc before-revision) latest))
@@ -503,25 +517,31 @@
       (is (= "Garden" (:request/area created)))
       (is (= "Large purple gloves" (:request/details created)))
 
-      (is (= 1 (count (:notify-calls result))))
-      (let [[live-system ctx' change] (first (:notify-calls result))]
-        (is (= ::live-system live-system))
-        (is (= (assoc ctx :params params) ctx'))
-        (is (= :request/created (:topic change)))
-        (is (= model/store-id (:id change)))
-        (is (= model/store-id (:store/id change)))
-        (is (= (:request/id created) (:request/id change)))
-        (is (= "owner" (:actor/id change)))
-        (is (= "owner@example.com" (:actor/email change))))
+      ;; Create no longer emits the model-backed :request/created live
+      ;; invalidation, and no longer calls the old toast helper. The creator is
+      ;; updated by this POST response; observers are notified through
+      ;; client-plumbing, excluding the creator.
+      (is (empty? (:notify-calls result)))
+      (is (empty? (:request-toasts result)))
+      (is (= 1 (count (:client-sends result))))
 
-      (is (= 1 (count (:request-toasts result))))
+      (let [[scope excluded-user-id fragment-fn] (first (:client-sends result))]
+        (is (= app-live/notification-scope scope))
+        (is (= "owner" excluded-user-id))
+        (is (fn? fragment-fn)))
 
+      ;; The creator gets the refresh-equivalent board update immediately.
       (assert-oob response views/request-toolbar-dom-id)
       (assert-oob response views/request-list-dom-id)
       (assert-oob response views/create-request-dialog-id)
       (assert-oob response views/board-state-form-id)
+
       (is (body-contains? response "Request created"))
       (is (body-contains? response title))
+      (is (not (body-contains? response "+1 new")))
+      (is (not (body-contains? response
+                                "New request data is available")))
+
       (is (body-has-input-value? response
                                  routes/visible-revision-param
                                  (str latest)))
@@ -1287,36 +1307,3 @@
     (is (body-has-input-value? response
                                routes/selected-param
                                (:request/id created)))))
-
-
-
-(deftest creator-does-not-see-own-create-as-pending-live-refresh-flow-test
-  (let [creator (base-ctx)
-        visible-before (model/latest-revision creator)
-        title "Need help finding creator live refresh bug target"
-        result (create-request-through-route!
-                creator
-                (create-params
-                 {"title" title
-                  "area" "Garden"
-                  "details" "This should not become a pending self-refresh."
-                  "customer-name" "Avery"}))
-        created (request-by-title creator title)
-        toolbar-response (endpoint!
-                          :get
-                          routes/request-toolbar-fragment-route
-                          creator
-                          {:params {"q" ""
-                                    "visible-revision"
-                                    (str visible-before)}})]
-    (assert-fragment-or-oob-response (:response result))
-    (assert-fragment-root toolbar-response views/request-toolbar-dom-id)
-
-    (is created)
-
-    ;; This mirrors the creator's own SSE-triggered toolbar GET if it races with
-    ;; the create response / board-state OOB update. A request created by this
-    ;; same user must not be counted as "new request data" for that user.
-    (is (not (body-contains? toolbar-response "+1 new")))
-    (is (not (body-contains? toolbar-response
-                             "New request data is available")))))

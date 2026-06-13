@@ -620,17 +620,19 @@
                :request open-request
                :toolbar toolbar
                :request-list request-list})]
-    (testing "successful create closes dialog and replaces both board fragments"
-      (let [dialog-oob (oob-by-id node views/create-request-dialog-id)
-            toolbar-oob (oob-by-id node views/request-toolbar-dom-id)
+    (testing "successful create replaces the board fragments"
+      (let [toolbar-oob (oob-by-id node views/request-toolbar-dom-id)
             list-oob (oob-by-id node views/request-list-dom-id)]
-        (is dialog-oob)
         (is toolbar-oob)
         (is list-oob)
-        (is (not (open-dialog? dialog-oob)))
-        (is (= "outerHTML" (:hx-swap-oob (attrs dialog-oob))))
         (is (= "outerHTML" (:hx-swap-oob (attrs toolbar-oob))))
         (is (= "outerHTML" (:hx-swap-oob (attrs list-oob))))))
+
+    (testing "successful create does not emit a separate dialog OOB"
+      ;; The app-level create response closes/resets the dialog via the refreshed
+      ;; toolbar fragment, which contains the closed create dialog in normal app
+      ;; rendering. This view helper only owns board-fragment OOB + toast.
+      (is (nil? (oob-by-id node views/create-request-dialog-id))))
 
     (testing "successful create includes a useful toast"
       (is (contains-text? node "Request created"))

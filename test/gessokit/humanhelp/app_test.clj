@@ -420,62 +420,78 @@
 
 (deftest create-request-success-test
   (let [notified (atom [])
-        toasts (atom [])]
+        request-toasts (atom [])
+        client-sends (atom [])
+        ctx (assoc (base-ctx)
+                   :params {"title" "Need gloves"
+                            "area" "Garden"
+                            "details" "Large gloves"
+                            "customer-name" "Avery"})
+        before-revision (model/latest-revision ctx)
+        before-count (count (model/all-requests ctx))]
     (with-redefs [app-live/notify!
-                  (recording-fn notified {:submitted true})
+                  (fn [& args]
+                    (swap! notified conj args)
+                    {:submitted true})
 
                   app-live/send-new-request-toast!
-                  (recording-fn toasts {:sent 1})]
-      (let [ctx (ctx-with-params
-                 (base-ctx)
-                 (valid-create-params
-                  {"title" "Need gloves"
-                   "area" "Garden"
-                   "details" "Large gloves"
-                   "customer-name" "Avery"}))
-            before-revision (model/latest-revision ctx)
-            response (app/create-request! ctx)
-            created (request-by-title ctx "Need gloves")
-            latest (model/latest-revision ctx)]
+                  (fn [& args]
+                    (swap! request-toasts conj args)
+                    {:sent 1})
+
+                  client-plumbing/send-to-scope-except-user!
+                  (fn [& args]
+                    (swap! client-sends conj args)
+                    {:sent 1})]
+      (let [response (app/create-request! ctx)
+            latest (model/latest-revision ctx)
+            created (first
+                     (filter #(= "Need gloves" (:request/title %))
+                             (model/all-requests ctx)))]
         (is (html-response? response))
-        (is created)
         (is (= (inc before-revision) latest))
-        (is (= "Need gloves" (:request/title created)))
+        (is (= (inc before-count) (count (model/all-requests ctx))))
+
+        (is created)
+        (is (= :open (:request/status created)))
+        (is (= "owner" (:request/customer-user-id created)))
+        (is (= "Avery" (:request/customer-name created)))
         (is (= "Garden" (:request/area created)))
         (is (= "Large gloves" (:request/details created)))
-        (is (= "Avery" (:request/customer-name created)))
 
-        (is (= 1 (count @notified)))
-        (is (= 1 (count @toasts)))
+        ;; Create no longer emits the model-backed :request/created live
+        ;; invalidation and no longer calls the old toast helper. The creator
+        ;; is updated by this POST response; observers are notified through
+        ;; client plumbing, excluding the creator.
+        (is (empty? @notified))
+        (is (empty? @request-toasts))
+        (is (= 1 (count @client-sends)))
 
-        (let [[live-system ctx' change] (first @notified)]
-          (is (= ::live-system live-system))
-          (is (= ctx ctx'))
-          (is (= :request/created (:topic change)))
-          (is (= model/store-id (:id change)))
-          (is (= model/store-id (:store/id change)))
-          (is (= (:request/id created)
-                 (:request/id change))))
+        (let [[scope excluded-user-id fragment-fn] (first @client-sends)]
+          (is (= app-live/notification-scope scope))
+          (is (= "owner" excluded-user-id))
+          (is (fn? fragment-fn)))
 
-        (testing "creator response closes dialog, refreshes board, and syncs board state"
-          (is (response-oob? response views/create-request-dialog-id))
-          (is (response-oob? response views/request-toolbar-dom-id))
-          (is (response-oob? response views/request-list-dom-id))
-          (is (response-oob? response views/board-state-form-id))
-          (is (body-contains? response "Need gloves"))
-          (is (body-has-input-value? response
-                                     routes/visible-revision-param
-                                     (str latest)))
-          (is (body-has-input-value? response
-                                     routes/selected-param
-                                     (:request/id created))))
+        ;; The creator gets the refresh-equivalent board update immediately.
+        (is (response-oob? response views/request-toolbar-dom-id))
+        (is (response-oob? response views/request-list-dom-id))
+        (is (response-oob? response views/create-request-dialog-id))
+        (is (response-oob? response views/board-state-form-id))
 
-        (testing "creator response includes a useful toast"
-          (is (body-contains? response "Request created"))
-          (is (body-contains? response
-                              (str "Request #"
-                                   (:request/number created)
-                                   " is now on the board."))))))))
+        (is (body-contains? response "Request created"))
+        (is (body-contains? response "Need gloves"))
+        (is (not (body-contains? response "+1 new")))
+        (is (not (body-contains? response
+                                  "New request data is available")))
+
+        (is (body-contains?
+             response
+             (str "name=\"" routes/visible-revision-param
+                  "\" value=\"" latest "\"")))
+        (is (body-contains?
+             response
+             (str "name=\"" routes/selected-param
+                  "\" value=\"" (:request/id created) "\"")))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request list interactions
