@@ -57,6 +57,7 @@
 ;; -----------------------------------------------------------------------------
 ;; Small helpers
 ;; -----------------------------------------------------------------------------
+
 (defn user-email
   "Return a real display email for a Human Help user map.
 
@@ -512,15 +513,8 @@
      :open? true})))
 
 (defn create-request-success
-  [ctx {:keys [user request toolbar request-list]}]
+  [ctx {:keys [request toolbar request-list]}]
   (oob-response
-   (replace-dialog-oob
-    (create-request-dialog
-     ctx
-     {:user user
-      :values {}
-      :errors {}
-      :open? false}))
    (fragments-oob
     {:toolbar toolbar
      :request-list request-list})
