@@ -243,9 +243,11 @@
    {:open? open?
     :attrs {:id create-request-dialog-id}}
    (create-request-button)
-   (g/dialog-overlay)
+   (g/dialog-overlay
+    {:open? open?})
    (g/dialog-content
-    {:title "Create request"
+    {:open? open?
+     :title "Create request"
      :description "Everyone can make and service requests in this Human Help analogue."
      :body [(create-request-dialog-body ctx opts)]})))
 
