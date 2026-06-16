@@ -48,9 +48,17 @@
 (def visible-revision-param
   "visible-revision")
 
-;; Later:
-;; (def show-terminal-param
-;;   "show-terminal")
+(def created-order-param
+  "created-order")
+
+(def mine-first-param
+  "mine-first")
+
+(def unclaimed-first-param
+  "unclaimed-first")
+
+(def show-terminal-param
+  "show-terminal")
 
 ;; -----------------------------------------------------------------------------
 ;; Route ids
@@ -82,6 +90,9 @@
 
 (def search-requests-id
   :humanhelp/search-requests)
+
+(def apply-board-options-id
+  :humanhelp/apply-board-options)
 
 (def select-request-id
   :humanhelp/select-request)
@@ -134,6 +145,9 @@
 
 (def search-requests-route
   "/requests/search")
+
+(def apply-board-options-route
+  "/humanhelp/board-options")
 
 (def select-request-route
   "/requests/:request-id/select")
@@ -197,6 +211,10 @@
     :method :get
     :route search-requests-route}
 
+   {:id apply-board-options-id
+    :method :post
+    :route apply-board-options-route}
+
    {:id select-request-id
     :method :get
     :route select-request-route}
@@ -257,10 +275,48 @@
   [handlers {:keys [method route] :as spec}]
   [route {method (handler-for! handlers spec)}])
 
+(def required-route-ids
+  "Route ids that existed before board-options work.
+
+   These remain fail-fast: if app.clj omits one of these handlers, route-table
+   throws exactly as it did before this feature."
+  [page-id
+   request-toolbar-fragment-id
+   request-list-fragment-id
+   create-request-dialog-fragment-id
+   request-toolbar-stream-id
+   request-list-stream-id
+   create-request-id
+   refresh-requests-id
+   search-requests-id
+   select-request-id
+   claim-request-id
+   unclaim-request-id
+   take-over-request-id
+   done-request-id
+   cancel-request-id
+   reset-demo-id])
+
+(def optional-route-ids
+  "Route ids that routes.clj exposes before app.clj is required to handle them.
+
+   This lets routes/views/model work land one namespace at a time. Once app.clj
+   supplies a handler for an optional route id, route-table includes it."
+  [apply-board-options-id])
+
+(defn- optional-route-entry
+  [handlers route-id]
+  (when (contains? handlers route-id)
+    (route-entry handlers (route-spec route-id))))
+
 (defn route-table
   "Return a Reitit route table for Human Help.
 
    handlers is a map of route id -> handler function.
+
+   Required route ids remain fail-fast. Optional route ids are included only
+   when their handlers are present, so this namespace can add new route facts
+   without breaking the currently deployed app.clj.
 
    Example:
 
@@ -273,27 +329,15 @@
   ([handlers]
    (route-table handlers nil))
   ([handlers {:keys [middleware]}]
-   [[base-path
-     (cond-> {}
-       (seq middleware)
-       (assoc :middleware middleware))
-
-     (route-entry handlers (route-spec page-id))
-     (route-entry handlers (route-spec request-toolbar-fragment-id))
-     (route-entry handlers (route-spec request-list-fragment-id))
-     (route-entry handlers (route-spec create-request-dialog-fragment-id))
-     (route-entry handlers (route-spec request-toolbar-stream-id))
-     (route-entry handlers (route-spec request-list-stream-id))
-     (route-entry handlers (route-spec create-request-id))
-     (route-entry handlers (route-spec refresh-requests-id))
-     (route-entry handlers (route-spec search-requests-id))
-     (route-entry handlers (route-spec select-request-id))
-     (route-entry handlers (route-spec claim-request-id))
-     (route-entry handlers (route-spec unclaim-request-id))
-     (route-entry handlers (route-spec take-over-request-id))
-     (route-entry handlers (route-spec done-request-id))
-     (route-entry handlers (route-spec cancel-request-id))
-     (route-entry handlers (route-spec reset-demo-id))]]))
+   (let [base-options (cond-> {}
+                        (seq middleware)
+                        (assoc :middleware middleware))
+         required     (mapv #(route-entry handlers (route-spec %))
+                            required-route-ids)
+         optional     (keep #(optional-route-entry handlers %)
+                            optional-route-ids)]
+     [(into [base-path base-options]
+            (concat required optional))])))
 
 ;; -----------------------------------------------------------------------------
 ;; URL helpers
@@ -318,6 +362,26 @@
   [x]
   (and (some? x)
        (not (str/blank? (str x)))))
+
+(defn- truthy-value?
+  [x]
+  (contains? #{"true" "on" "1" "yes"}
+             (some-> x str str/trim str/lower-case)))
+
+(defn- created-order-query-value
+  [created-order]
+  (let [created-order' (cond
+                         (keyword? created-order)
+                         (name created-order)
+
+                         (some? created-order)
+                         (-> created-order str str/trim)
+
+                         :else
+                         nil)]
+    (when (and (present? created-order')
+               (not= "newest" created-order'))
+      created-order')))
 
 (defn query-string
   "Build a URL query string from a map.
@@ -359,11 +423,29 @@
    Expected view-state keys:
      :search
      :selected-request-id
-     :visible-revision"
-  [{:keys [search selected-request-id visible-revision]}]
+     :visible-revision
+     :created-order
+     :mine-first?
+     :unclaimed-first?
+     :show-terminal?
+
+   Default board-option values are omitted from generated URLs. Forms still
+   preserve explicit false checkbox state with hidden inputs once views.clj is
+   updated; URL builders only need to carry non-default state."
+  [{:keys [search
+           selected-request-id
+           visible-revision
+           created-order
+           mine-first?
+           unclaimed-first?
+           show-terminal?]}]
   {search-param search
    selected-param selected-request-id
-   visible-revision-param visible-revision})
+   visible-revision-param visible-revision
+   created-order-param (created-order-query-value created-order)
+   mine-first-param (when (truthy-value? mine-first?) "true")
+   unclaimed-first-param (when (truthy-value? unclaimed-first?) "true")
+   show-terminal-param (when (truthy-value? show-terminal?) "true")})
 
 (defn request-route
   "Substitute request-id into a relative request route."
@@ -449,6 +531,10 @@
    (with-query
     (search-requests-url)
     (view-state-query view-state))))
+
+(defn apply-board-options-url
+  []
+  (path apply-board-options-route))
 
 (defn select-request-url
   ([request-id]
