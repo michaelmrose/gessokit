@@ -27,6 +27,7 @@
    are resolved lazily instead."
   (:require
    [gesso.core :as g]
+   [gesso.live.continuity :as continuity]
    [gesso.live.core :as live]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.model :as model]
@@ -116,6 +117,25 @@
 (defn board-state-selector
   []
   (str "#" (board-state-form-id)))
+
+;; -----------------------------------------------------------------------------
+;; Client continuity
+;; -----------------------------------------------------------------------------
+
+(def request-list-client-continuity
+  "Client-only interaction continuity for the request list.
+
+   Selection/filter state remains server-relevant board state carried through
+   #humanhelp-board-state and hx-include. This continuity config is only for
+   browser-local context that should survive list replacement, especially scroll
+   anchoring and focus/caret restoration.
+
+   The scroll selector should match stable request-card elements in the rendered
+   list. If the request list later moves into its own scrollable viewport, add a
+   :container-selector here and mark that viewport in views."
+  (continuity/preserve
+   {:scroll {:selector "[data-humanhelp-request-card]"}
+    :focus true}))
 
 ;; -----------------------------------------------------------------------------
 ;; Live scope authorization
@@ -268,7 +288,11 @@
    The fragment and stream URLs intentionally omit q/selected/visible-revision.
    Browser-local board state is carried by #humanhelp-board-state and included
    on live fragment fetches through :root-attrs. This keeps the stable live
-   wrapper generic while preserving the current client-side view state."
+   wrapper generic while preserving the current client-side view state.
+
+   Request-list scroll/focus continuity is client-only and is therefore declared
+   as :client-continuity on the request-list panel. Selection remains ordinary
+   board state, not a continuity concern."
   ([fragment-name]
    (fragment-options fragment-name nil))
   ([fragment-name _view-state]
@@ -276,12 +300,16 @@
      :request-toolbar
      {:fragment-url (routes/request-toolbar-fragment-url)
       :stream-url (routes/request-toolbar-stream-url)
+      :trigger "load, pageshow from:window, visibilitychange from:document, online from:window, htmx:sseOpen from:body, gesso:live-connected from:body"
       :root-attrs {:hx-include (board-state-selector)}}
 
      :request-list
      {:fragment-url (routes/request-list-fragment-url)
       :stream-url (routes/request-list-stream-url)
-      :root-attrs {:hx-include (board-state-selector)}}
+      :trigger "load"
+      :root-attrs {:hx-include (board-state-selector)
+                   :hx-swap "outerHTML show:none focus-scroll:false"}
+      :client-continuity request-list-client-continuity}
 
      (throw
       (ex-info "Unknown Human Help live fragment."
