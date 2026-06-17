@@ -86,7 +86,6 @@
    and normalizes option values against current persisted Human Help data."
   [ctx]
   {:search (or (param ctx routes/search-param) "")
-   :selected-request-id (param ctx routes/selected-param)
    :visible-revision (model/parse-visible-revision
                       (param ctx routes/visible-revision-param))
    :created-order (param ctx routes/created-order-param)
@@ -271,7 +270,7 @@
   "Return the receiving browser's view-state for a new-request notification.
 
    The pending client-plumbing request normally includes #humanhelp-board-state,
-   so this uses the receiver browser's own q/selected/visible-revision state.
+   so this uses the receiver browser's own q/visible-revision/options state.
 
    If visible-revision is absent, fall back to a definitely-stale revision so
    the receiver gets the stale toolbar affordance instead of accidentally
@@ -393,7 +392,6 @@
 
    This is the refresh-equivalent actor path:
    - advance visible-revision to the create revision
-   - select the newly-created request
    - render toolbar from the model
    - render list from the model
    - close/reset the dialog through views/create-request-success
@@ -403,8 +401,7 @@
   [ctx {:keys [request revision view-state]}]
   (let [user        (current-user ctx)
         view-state' (assoc view-state
-                            :visible-revision revision
-                            :selected-request-id (:request/id request))
+                            :visible-revision revision)
         fragments   (board-fragments ctx view-state')]
     (html
      (with-board-state-oob
@@ -489,10 +486,10 @@
 (defn apply-board-options
   "Apply request-board sort/filter options without mutating persisted state.
 
-   The board-options dialog submits current search/selection/revision from the
-   stable board-state form plus its own visible option controls. The response
-   replaces board state first, then toolbar and request list, so subsequent
-   requests preserve the newly-applied options."
+   The board-options dialog submits current search/revision from the stable
+   board-state form plus its own visible option controls. The response replaces
+   board state first, then toolbar and request list, so subsequent requests
+   preserve the newly-applied options."
   [ctx]
   (let [view-state (normalized-view-state ctx (request-view-state ctx))]
     (html
@@ -501,23 +498,6 @@
        view-state
        (views/refreshed-request-board-fragments
         (board-fragments ctx view-state))))))
-
-(defn select-request
-  "Render the request list with one selected/expanded card and sync board state.
-
-   The selected request id comes from the route path, not the submitted
-   board-state form. The board-state form may still contain the previous
-   selected value because stable live wrappers include it during fragment
-   refreshes."
-  [ctx]
-  (let [view-state (assoc (request-view-state ctx)
-                          :selected-request-id
-                          (request-id ctx))]
-    (html
-     (with-board-state-oob
-       ctx
-       view-state
-       (render-list-node ctx view-state)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request lifecycle actions
@@ -656,7 +636,6 @@
    routes/refresh-requests-id refresh-requests!
    routes/search-requests-id search-requests
    routes/apply-board-options-id apply-board-options
-   routes/select-request-id select-request
 
    routes/claim-request-id claim-request!
    routes/unclaim-request-id unclaim-request!

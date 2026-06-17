@@ -1699,11 +1699,6 @@
       ""
       search')))
 
-(defn normalize-selected-request-id
-  [selected-request-id]
-  (let [selected' (some-> selected-request-id str str/trim)]
-    (when-not (str/blank? selected')
-      selected')))
 
 (defn normalize-visible-revision
   [ctx visible-revision]
@@ -1721,7 +1716,6 @@
 
    Always returns a complete shape:
      {:search ...
-      :selected-request-id ...
       :visible-revision ...
       :created-order ...
       :mine-first? ...
@@ -1731,11 +1725,6 @@
   (let [view-state' (or view-state {})]
     {:search (normalize-search
               (view-state-value view-state' :search :q "q"))
-     :selected-request-id (normalize-selected-request-id
-                           (view-state-value view-state'
-                                             :selected-request-id
-                                             :selected
-                                             "selected"))
      :visible-revision (normalize-visible-revision
                         ctx
                         (view-state-value view-state'

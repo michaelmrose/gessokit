@@ -1256,7 +1256,6 @@
 (deftest normalize-view-state-test
   (testing "nil view-state normalizes to a complete usable shape"
     (is (= {:search ""
-            :selected-request-id nil
             :visible-revision (model/latest-revision (ctx))
             :created-order :newest
             :mine-first? false
@@ -1284,21 +1283,6 @@
              (ctx)
              {:search "  garden rake  "})))))
 
-  (testing "blank selected request id normalizes to nil"
-    (doseq [selected [nil "" "   "]]
-      (is (nil?
-           (:selected-request-id
-            (model/normalize-view-state
-             (ctx)
-             {:selected-request-id selected}))))))
-
-  (testing "selected request id is trimmed and preserved"
-    (is (= "hh-req-1"
-           (:selected-request-id
-            (model/normalize-view-state
-             (ctx)
-             {:selected-request-id "  hh-req-1  "})))))
-
   (testing "visible revision defaults to latest only when absent"
     (let [latest (model/latest-revision (ctx))]
       (is (= latest
@@ -1315,7 +1299,6 @@
 
   (testing "board options normalize from raw form values"
     (is (= {:search "garden"
-            :selected-request-id "hh-req-1"
             :visible-revision 2
             :created-order :oldest
             :mine-first? true
@@ -1324,7 +1307,6 @@
            (model/normalize-view-state
             (ctx)
             {"q" " garden "
-             "selected" " hh-req-1 "
              "visible-revision" "2"
              "created-order" "oldest"
              "mine-first" "on"
@@ -1641,33 +1623,6 @@
                           (:request/id request))))
       (is (contains? (set (request-ids (:requests fresh-board)))
                      (:request/id request))))))
-
-(deftest board-data-selection-test
-  (testing "selected request id is preserved in normalized view state"
-    (let [some-request (first (model/all-requests (ctx)))
-          board (model/board-data
-                 (ctx)
-                 {:search ""
-                  :selected-request-id (:request/id some-request)
-                  :visible-revision (model/latest-revision (ctx))})]
-      (is (= (:request/id some-request)
-             (get-in board [:view-state :selected-request-id])))))
-
-  (testing "selected request id may refer to a request not currently visible"
-    (let [visible-before (model/latest-revision (ctx))
-          {:keys [request]} (model/create-request!
-                             (ctx)
-                             {:user user-owner
-                              :input (valid-input {:title "Not yet visible"})})
-          board (model/board-data
-                 (ctx)
-                 {:search ""
-                  :selected-request-id (:request/id request)
-                  :visible-revision visible-before})]
-      (is (= (:request/id request)
-             (get-in board [:view-state :selected-request-id])))
-      (is (not (contains? (set (request-ids (:requests board)))
-                          (:request/id request)))))))
 
 (deftest board-data-terminal-visibility-test
   (testing "board-data hides old terminal requests by default and includes them when requested"

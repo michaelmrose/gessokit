@@ -287,7 +287,6 @@
 (defn latest-view-state
   [ctx]
   {:search ""
-   :selected-request-id nil
    :visible-revision (model/latest-revision ctx)})
 
 (defn open-seed-request
@@ -296,15 +295,15 @@
    (filter #(= :open (:request/status %))
            (model/all-requests ctx))))
 
-(defn selected-params
-  [ctx request-id]
+(defn current-board-params
+  [ctx]
   {"q" ""
-   "selected" request-id
    "visible-revision" (str (model/latest-revision ctx))})
 
 ;; -----------------------------------------------------------------------------
 ;; Side-effect recorders
 ;; -----------------------------------------------------------------------------
+
 (defn notify-recorder
   [calls]
   (fn [& args]
@@ -399,7 +398,7 @@
                   route
                   ctx
                   {:path-params {:request-id request-id}
-                   :params (selected-params ctx request-id)})
+                   :params (current-board-params ctx)})
        :notify-calls @notify-calls})))
 
 (defn lifecycle-action-through-route!
@@ -544,10 +543,7 @@
 
       (is (body-has-input-value? response
                                  routes/visible-revision-param
-                                 (str latest)))
-      (is (body-has-input-value? response
-                                 routes/selected-param
-                                 (:request/id created))))))
+                                 (str latest))))))
 
 (deftest create-request-repeated-param-flow-test
   (testing "mounted create route uses the final scalar value for repeated params"
@@ -810,31 +806,6 @@
         (assert-fragment-root fresh-response views/request-list-dom-id)
         (is (not (body-contains? stale-response title)))
         (is (body-contains? fresh-response title))))))
-
-;; -----------------------------------------------------------------------------
-;; Selection flow
-;; -----------------------------------------------------------------------------
-
-(deftest select-request-flow-test
-  (testing "mounted select route updates selected hidden board state and returns list + board-state OOB"
-    (let [ctx (base-ctx)
-          request (first (model/all-requests ctx))
-          request-id (:request/id request)
-          response (endpoint!
-                    :get
-                    routes/select-request-route
-                    ctx
-                    {:path-params {:request-id request-id}
-                     :params {"selected" request-id
-                              "visible-revision"
-                              (str (model/latest-revision ctx))}})]
-      (assert-fragment-or-oob-response response)
-      (is (body-contains? response views/request-list-dom-id))
-      (is (body-contains? response (:request/title request)))
-      (assert-oob response views/board-state-form-id)
-      (is (body-has-input-value? response
-                                 routes/selected-param
-                                 request-id)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle flows
@@ -1100,7 +1071,6 @@
                                routes/request-list-fragment-route
                                helper
                                {:params {"q" ""
-                                         "selected" request-id
                                          "visible-revision"
                                          (str visible-before)}})]
         (assert-fragment-root fragment-response views/request-list-dom-id)
@@ -1303,7 +1273,4 @@
     ;; refreshes and fragment requests do not keep using the old revision.
     (is (body-has-input-value? response
                                routes/visible-revision-param
-                               (str latest)))
-    (is (body-has-input-value? response
-                               routes/selected-param
-                               (:request/id created)))))
+                               (str latest)))))

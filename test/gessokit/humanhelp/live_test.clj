@@ -61,13 +61,11 @@
 
 (def view-state
   {:search "garden"
-   :selected-request-id nil
    :visible-revision 3})
 
 (defn latest-view-state
   []
   {:search ""
-   :selected-request-id nil
    :visible-revision (model/latest-revision (ctx))})
 
 (defn render-opts
@@ -462,7 +460,6 @@
 
 (deftest fragment-options-test
   (let [state {:search "garden rake"
-               :selected-request-id "hh-req-1"
                :visible-revision 3}
         toolbar (hh-live/fragment-options :request-toolbar state)
         request-list (hh-live/fragment-options :request-list state)]
@@ -573,7 +570,7 @@
              (:hx-include a)))
       (is (= (str "#" views/request-list-dom-id)
              (:hx-target a)))
-      (is (= "outerHTML" (:hx-swap a)))
+      (is (= "outerHTML show:none focus-scroll:false" (:hx-swap a)))
       (is (str/includes? (:hx-trigger a) "sse:live-update"))
       (is (find-by-id node views/request-list-dom-id)))))
 

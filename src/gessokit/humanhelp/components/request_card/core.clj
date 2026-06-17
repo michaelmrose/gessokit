@@ -44,16 +44,19 @@
     (hidden-input routes/created-order-param (name created-order))))
 
 (defn view-state-hidden-inputs
-  "Render full view-state hidden inputs for request action forms.
+  "Render board view-state hidden inputs for request action forms.
 
    Action forms do not have their own visible search or board-option controls,
    so they preserve the current normalized board state.
 
    If a caller supplies :board-state-selector to request-card, the action form
    also hx-includes the live board-state form. These hidden fields remain useful
-   as a safe fallback for callers that do not yet pass that selector."
+   as a safe fallback for callers that do not yet pass that selector.
+
+   Open/selected request-card state is intentionally not preserved here.
+   Preserving local accordion open state across fragment replacement belongs to
+   Gesso Live continuity."
   [{:keys [search
-           selected-request-id
            visible-revision
            created-order
            mine-first?
@@ -61,7 +64,6 @@
            show-terminal?]}]
   [:div {:style {:display "contents"}}
    (hidden-input routes/search-param search)
-   (hidden-input routes/selected-param selected-request-id)
    (hidden-input routes/visible-revision-param visible-revision)
    (created-order-input created-order)
    (true-input routes/mine-first-param mine-first?)
@@ -98,11 +100,6 @@
                :default)
     :view-state view-state
     :board-state-selector board-state-selector}))
-
-(defn card-open?
-  [request view-state]
-  (= (:request/id request)
-     (:selected-request-id view-state)))
 
 (defn request-meta
   [request]
@@ -175,7 +172,7 @@
 (defn request-card
   [ctx {:keys [request user view-state board-state-selector]}]
   (let [view-state (or view-state {})
-        open?      (card-open? request view-state)]
+        open?      false]
     (g/accordion-item
      {:value (:request/id request)
       :open? open?

@@ -42,9 +42,6 @@
 (def search-param
   "q")
 
-(def selected-param
-  "selected")
-
 (def visible-revision-param
   "visible-revision")
 
@@ -93,9 +90,6 @@
 
 (def apply-board-options-id
   :humanhelp/apply-board-options)
-
-(def select-request-id
-  :humanhelp/select-request)
 
 (def claim-request-id
   :humanhelp/claim-request)
@@ -148,9 +142,6 @@
 
 (def apply-board-options-route
   "/humanhelp/board-options")
-
-(def select-request-route
-  "/requests/:request-id/select")
 
 (def claim-request-route
   "/requests/:request-id/claim")
@@ -214,10 +205,6 @@
    {:id apply-board-options-id
     :method :post
     :route apply-board-options-route}
-
-   {:id select-request-id
-    :method :get
-    :route select-request-route}
 
    {:id claim-request-id
     :method :post
@@ -289,7 +276,6 @@
    create-request-id
    refresh-requests-id
    search-requests-id
-   select-request-id
    claim-request-id
    unclaim-request-id
    take-over-request-id
@@ -422,18 +408,15 @@
 
    Expected view-state keys:
      :search
-     :selected-request-id
      :visible-revision
      :created-order
      :mine-first?
      :unclaimed-first?
      :show-terminal?
 
-   The original public shape is preserved: q/selected/visible-revision are
-   always present in the returned map, while board-option keys are included only
-   when they carry non-default state."
+   q/visible-revision are always present in the returned map, while board-option
+   keys are included only when they carry non-default state."
   [{:keys [search
-           selected-request-id
            visible-revision
            created-order
            mine-first?
@@ -441,7 +424,6 @@
            show-terminal?]}]
   (let [created-order' (created-order-query-value created-order)]
     (cond-> {search-param search
-             selected-param selected-request-id
              visible-revision-param visible-revision}
       (some? created-order')
       (assoc created-order-param created-order')
@@ -543,22 +525,6 @@
 (defn apply-board-options-url
   []
   (path apply-board-options-route))
-
-(defn select-request-url
-  ([request-id]
-   (path (request-route select-request-route request-id)))
-  ([request-id view-state]
-   (with-query
-    (select-request-url request-id)
-    (view-state-query
-     (assoc view-state :selected-request-id request-id)))))
-
-(defn clear-selection-url
-  [view-state]
-  (with-query
-   (request-list-fragment-url)
-   (view-state-query
-    (assoc view-state :selected-request-id nil))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request lifecycle action URLs

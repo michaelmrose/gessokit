@@ -63,20 +63,15 @@
        name
        "]"))
 
-(defn selected-state-input-selector
-  []
-  (board-state-input-selector routes/selected-param))
-
 (defn board-options-preserved-state-selector
   "Return the live DOM fields that board-options submits but does not edit.
 
    Do not include the whole board-state form here: it contains hidden board-option
    inputs, and the options form has visible controls for those same params. The
-   options form should include only current search, selected request, and visible
-   revision from the stable board-state/search form."
+   options form should include only current search and visible revision from the
+   stable board-state/search form."
   []
   (str "#" search-input-dom-id
-       ", " (board-state-input-selector routes/selected-param)
        ", " (board-state-input-selector routes/visible-revision-param)))
 
 ;; -----------------------------------------------------------------------------
@@ -113,16 +108,6 @@
              :name name
              :value value}]))
 
-(defn hidden-input-present
-  "Render a hidden input even when value is blank.
-
-   Useful for inputs that client-side behavior writes into by selector or for
-   form state where an intentionally blank value should still be submitted."
-  [name value]
-  [:input {:type "hidden"
-           :name name
-           :value (or value "")}])
-
 (defn boolean-param-value
   [x]
   (if x "true" "false"))
@@ -156,10 +141,9 @@
    Use this for forms that do not have their own visible search input.
    Do not use this inside search-control, because that form already has the
    visible search input named q."
-  [{:keys [search selected-request-id visible-revision] :as view-state}]
+  [{:keys [search visible-revision] :as view-state}]
   [:div {:style {:display "contents"}}
    (hidden-input routes/search-param search)
-   (hidden-input routes/selected-param selected-request-id)
    (hidden-input routes/visible-revision-param visible-revision)
    (board-state-option-hidden-inputs view-state)])
 
@@ -168,16 +152,11 @@
 
    Deliberately omits q/search because the visible search input is the source
    of truth for q. Rendering both a hidden q and visible q causes repeated
-   params such as [\"\" \"test\"].
-
-   The selected input is always rendered, even when blank, because the generic
-   Gesso accordion state-sync script needs a stable input to write into."
-  [{:keys [selected-request-id visible-revision] :as view-state}]
+   params such as [\"\" \"test\"]."
+  [{:keys [visible-revision] :as view-state}]
   [:div {:style {:display "contents"}}
-   (hidden-input-present routes/selected-param selected-request-id)
    (hidden-input routes/visible-revision-param visible-revision)
    (board-state-option-hidden-inputs view-state)])
-
 
 (defn oob-response
   [& nodes]
@@ -572,10 +551,6 @@
    g/accordion
    {:type :single
     :collapsible? true
-    :default-value (:selected-request-id view-state)
-    :state-input (selected-state-input-selector)
-    :state-name routes/selected-param
-    :state-include? true
     :class "content-stack-theme shadow-none"
     :attrs {:data-humanhelp-request-accordion true}}
    (map
@@ -676,8 +651,8 @@
 (defn replace-board-state-oob
   "Render an OOB replacement for the stable board-state/search form.
 
-   The app should use this whenever a response changes selected request,
-   visible revision, or board options outside the search form itself."
+   The app should use this whenever a response changes visible revision or board
+   options outside the search form itself."
   ([view-state]
    (replace-board-state-oob nil view-state))
   ([ctx view-state]

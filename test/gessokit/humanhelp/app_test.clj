@@ -281,11 +281,9 @@
       (let [ctx (ctx-with-params
                  (base-ctx)
                  {"q" ["" "garden"]
-                  "selected" "hh-req-1"
                   "visible-revision" "2"})
             result (app/app-page ctx)]
         (is (= "garden" (get-in result [:view-state :search])))
-        (is (= "hh-req-1" (get-in result [:view-state :selected-request-id])))
         (is (= 2 (get-in result [:view-state :visible-revision])))
         (is (= (:view-state result) @seen-view-state))))))
 
@@ -304,7 +302,6 @@
       (let [ctx (ctx-with-params
                  (base-ctx)
                  {"q" "garden"
-                  "selected" "hh-req-1"
                   "visible-revision" "3"})]
         (is (html-response? (app/request-toolbar-fragment ctx)))
         (is (html-response? (app/request-list-fragment ctx)))
@@ -318,7 +315,6 @@
           (is (= :request-list list-fragment))
 
           (is (= "garden" (get-in toolbar-opts [:view-state :search])))
-          (is (= "hh-req-1" (get-in toolbar-opts [:view-state :selected-request-id])))
           (is (= 3 (get-in toolbar-opts [:view-state :visible-revision])))
           (is (= toolbar-opts list-opts)))))))
 
@@ -487,11 +483,7 @@
         (is (body-contains?
              response
              (str "name=\"" routes/visible-revision-param
-                  "\" value=\"" latest "\"")))
-        (is (body-contains?
-             response
-             (str "name=\"" routes/selected-param
-                  "\" value=\"" (:request/id created) "\"")))))))
+                  "\" value=\"" latest "\"")))))))
 
 ;; -----------------------------------------------------------------------------
 ;; Request list interactions
@@ -572,25 +564,6 @@
     (is (html-response? clear-response))
     (is (body-contains? clear-response views/request-list-dom-id))
     (is (body-contains? clear-response "Need help finding a rake"))))
-
-(deftest select-request-test
-  (let [ctx (base-ctx)
-        request (open-seed-request ctx)
-        response (app/select-request
-                  (assoc
-                   (ctx-with-params
-                    ctx
-                    {"selected" "old-selection"
-                     "visible-revision" (str (model/latest-revision ctx))})
-                   :path-params {:request-id (:request/id request)}))]
-    (is request)
-    (is (html-response? response))
-    (is (response-oob? response views/board-state-form-id))
-    (is (body-has-input-value? response
-                               routes/selected-param
-                               (:request/id request)))
-    (is (body-contains? response views/request-list-dom-id))
-    (is (body-contains? response (:request/title request)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Lifecycle actions
@@ -754,7 +727,6 @@
                    routes/create-request-route
                    routes/refresh-requests-route
                    routes/search-requests-route
-                   routes/select-request-route
                    routes/claim-request-route
                    routes/unclaim-request-route
                    routes/take-over-request-route
@@ -769,7 +741,6 @@
     (is (route-entry? routes routes/create-request-route :post app/create-request!))
     (is (route-entry? routes routes/refresh-requests-route :post app/refresh-requests!))
     (is (route-entry? routes routes/search-requests-route :get app/search-requests))
-    (is (route-entry? routes routes/select-request-route :get app/select-request))
 
     (is (route-entry? routes routes/request-toolbar-fragment-route :get app/request-toolbar-fragment))
     (is (route-entry? routes routes/request-list-fragment-route :get app/request-list-fragment))

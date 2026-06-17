@@ -86,29 +86,25 @@
            (count prefix)
            action-start))))
 
-(defn request-id-from-select-url
-  [url]
-  (let [path (path-of url)
-        prefix "/app/requests/"
-        suffix "/select"]
-    (decode
-     (subs path
-           (count prefix)
-           (- (count path) (count suffix))))))
-
 ;; -----------------------------------------------------------------------------
 ;; Fixtures
 ;; -----------------------------------------------------------------------------
 
 (def full-view-state
   {:search "garden rake"
-   :selected-request-id "hh-req-1"
    :visible-revision 3})
 
 (def blank-view-state
   {:search ""
-   :selected-request-id nil
    :visible-revision nil})
+
+(def board-options-view-state
+  {:search "paint"
+   :visible-revision 7
+   :created-order :oldest
+   :mine-first? true
+   :unclaimed-first? true
+   :show-terminal? true})
 
 (def all-route-fragments
   [routes/request-toolbar-fragment-route
@@ -119,7 +115,7 @@
    routes/create-request-route
    routes/refresh-requests-route
    routes/search-requests-route
-   routes/select-request-route
+   routes/apply-board-options-route
    routes/claim-request-route
    routes/unclaim-request-route
    routes/take-over-request-route
@@ -128,8 +124,7 @@
    routes/reset-demo-route])
 
 (def request-specific-route-fragments
-  [routes/select-request-route
-   routes/claim-request-route
+  [routes/claim-request-route
    routes/unclaim-request-route
    routes/take-over-request-route
    routes/done-request-route
@@ -144,6 +139,7 @@
    routes/create-request-route
    routes/refresh-requests-route
    routes/search-requests-route
+   routes/apply-board-options-route
    routes/reset-demo-route])
 
 ;; -----------------------------------------------------------------------------
@@ -154,9 +150,14 @@
   (is (= "/app" routes/base-path))
   (is (= "demo-store" routes/store-id))
 
+  (is (= "request-id" routes/request-id-param))
+
   (is (= "q" routes/search-param))
-  (is (= "selected" routes/selected-param))
   (is (= "visible-revision" routes/visible-revision-param))
+  (is (= "created-order" routes/created-order-param))
+  (is (= "mine-first" routes/mine-first-param))
+  (is (= "unclaimed-first" routes/unclaimed-first-param))
+  (is (= "show-terminal" routes/show-terminal-param))
 
   (doseq [route all-route-fragments]
     (is (string? route))
@@ -181,6 +182,8 @@
          (routes/path routes/refresh-requests-route)))
   (is (= "/app/requests/search"
          (routes/path routes/search-requests-route)))
+  (is (= "/app/humanhelp/board-options"
+         (routes/path routes/apply-board-options-route)))
   (is (= "/app/demo/reset"
          (routes/path routes/reset-demo-route)))
 
@@ -214,13 +217,11 @@
   (let [qs (routes/query-string
             {:q "jon rake/garden"
              :visible-revision 3
-             :selected "hh-req-1"
              :status :open
              :thing 'hello})]
     (is (str/starts-with? qs "?"))
     (is (= "jon rake/garden" (query-value qs :q)))
     (is (= "3" (query-value qs :visible-revision)))
-    (is (= "hh-req-1" (query-value qs :selected)))
     (is (= ":open" (query-value qs :status)))
     (is (= "hello" (query-value qs :thing)))))
 
@@ -248,17 +249,33 @@
 
 (deftest view-state-query-test
   (is (= {"q" "garden"
-          "selected" "hh-req-1"
           "visible-revision" 3}
          (routes/view-state-query
           {:search "garden"
-           :selected-request-id "hh-req-1"
            :visible-revision 3})))
 
   (is (= {"q" nil
-          "selected" nil
           "visible-revision" nil}
          (routes/view-state-query nil))))
+
+(deftest view-state-query-board-options-test
+  (is (= {"q" "paint"
+          "visible-revision" 7
+          "created-order" "oldest"
+          "mine-first" "true"
+          "unclaimed-first" "true"
+          "show-terminal" "true"}
+         (routes/view-state-query board-options-view-state)))
+
+  (is (= {"q" "paint"
+          "visible-revision" 7}
+         (routes/view-state-query
+          {:search "paint"
+           :visible-revision 7
+           :created-order :newest
+           :mine-first? false
+           :unclaimed-first? false
+           :show-terminal? false}))))
 
 ;; -----------------------------------------------------------------------------
 ;; Page / fragment / stream URLs
@@ -273,8 +290,16 @@
   (let [url (routes/page-url full-view-state)]
     (is (= routes/base-path (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
-    (is (= "3" (query-value url routes/visible-revision-param)))))
+    (is (= "3" (query-value url routes/visible-revision-param))))
+
+  (let [url (routes/page-url board-options-view-state)]
+    (is (= routes/base-path (path-of url)))
+    (is (= "paint" (query-value url routes/search-param)))
+    (is (= "7" (query-value url routes/visible-revision-param)))
+    (is (= "oldest" (query-value url routes/created-order-param)))
+    (is (= "true" (query-value url routes/mine-first-param)))
+    (is (= "true" (query-value url routes/unclaimed-first-param)))
+    (is (= "true" (query-value url routes/show-terminal-param)))))
 
 (deftest fragment-url-test
   (is (= "/app/fragments/request-toolbar"
@@ -290,14 +315,21 @@
   (let [url (routes/request-toolbar-fragment-url full-view-state)]
     (is (= "/app/fragments/request-toolbar" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
 
   (let [url (routes/request-list-fragment-url full-view-state)]
     (is (= "/app/fragments/requests" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
+
+  (let [url (routes/request-list-fragment-url board-options-view-state)]
+    (is (= "/app/fragments/requests" (path-of url)))
+    (is (= "paint" (query-value url routes/search-param)))
+    (is (= "7" (query-value url routes/visible-revision-param)))
+    (is (= "oldest" (query-value url routes/created-order-param)))
+    (is (= "true" (query-value url routes/mine-first-param)))
+    (is (= "true" (query-value url routes/unclaimed-first-param)))
+    (is (= "true" (query-value url routes/show-terminal-param))))
 
   (is (no-query? (routes/request-toolbar-fragment-url blank-view-state)))
   (is (no-query? (routes/request-list-fragment-url blank-view-state))))
@@ -314,13 +346,11 @@
   (let [url (routes/request-toolbar-stream-url full-view-state)]
     (is (= "/app/streams/request-toolbar" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
 
   (let [url (routes/request-list-stream-url full-view-state)]
     (is (= "/app/streams/requests" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
 
   (is (no-query? (routes/request-toolbar-stream-url blank-view-state)))
@@ -337,18 +367,27 @@
          (routes/refresh-requests-url)))
   (is (= "/app/requests/search"
          (routes/search-requests-url)))
+  (is (= "/app/humanhelp/board-options"
+         (routes/apply-board-options-url)))
 
   (let [url (routes/refresh-requests-url full-view-state)]
     (is (= "/app/requests/refresh" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
 
   (let [url (routes/search-requests-url full-view-state)]
     (is (= "/app/requests/search" (path-of url)))
     (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
     (is (= "3" (query-value url routes/visible-revision-param))))
+
+  (let [url (routes/refresh-requests-url board-options-view-state)]
+    (is (= "/app/requests/refresh" (path-of url)))
+    (is (= "paint" (query-value url routes/search-param)))
+    (is (= "7" (query-value url routes/visible-revision-param)))
+    (is (= "oldest" (query-value url routes/created-order-param)))
+    (is (= "true" (query-value url routes/mine-first-param)))
+    (is (= "true" (query-value url routes/unclaimed-first-param)))
+    (is (= "true" (query-value url routes/show-terminal-param))))
 
   (is (= "/app/requests/refresh"
          (routes/refresh-requests-url blank-view-state)))
@@ -409,36 +448,8 @@
       (is (= :explode (:action (ex-data e)))))))
 
 ;; -----------------------------------------------------------------------------
-;; Selection / reset URLs
+;; Reset URL
 ;; -----------------------------------------------------------------------------
-
-(deftest select-request-url-test
-  (is (= "/app/requests/hh-req-1/select"
-         (routes/select-request-url "hh-req-1")))
-  (is (no-query? (routes/select-request-url "hh-req-1")))
-
-  (let [url (routes/select-request-url "hh-req-1" full-view-state)]
-    (is (= "/app/requests/hh-req-1/select" (path-of url)))
-    (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "hh-req-1" (query-value url routes/selected-param)))
-    (is (= "3" (query-value url routes/visible-revision-param))))
-
-  (let [request-id "id with spaces/slash"
-        url (routes/select-request-url request-id blank-view-state)]
-    (is (= request-id (request-id-from-select-url url)))
-    (is (= request-id (query-value url routes/selected-param)))
-    (is (nil? (query-value url routes/search-param)))
-    (is (nil? (query-value url routes/visible-revision-param)))))
-
-(deftest clear-selection-url-test
-  (let [url (routes/clear-selection-url full-view-state)]
-    (is (= "/app/fragments/requests" (path-of url)))
-    (is (= "garden rake" (query-value url routes/search-param)))
-    (is (= "3" (query-value url routes/visible-revision-param)))
-    (is (nil? (query-value url routes/selected-param))))
-
-  (is (= "/app/fragments/requests"
-         (routes/clear-selection-url blank-view-state))))
 
 (deftest reset-demo-url-test
   (is (= "/app/demo/reset" (routes/reset-demo-url))))
@@ -464,5 +475,7 @@
          (path-of (routes/refresh-requests-url full-view-state))))
   (is (= (routes/path routes/search-requests-route)
          (path-of (routes/search-requests-url full-view-state))))
+  (is (= (routes/path routes/apply-board-options-route)
+         (routes/apply-board-options-url)))
   (is (= (routes/path routes/reset-demo-route)
          (routes/reset-demo-url))))
