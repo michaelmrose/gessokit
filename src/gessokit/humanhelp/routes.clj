@@ -429,9 +429,9 @@
      :unclaimed-first?
      :show-terminal?
 
-   Default board-option values are omitted from generated URLs. Forms still
-   preserve explicit false checkbox state with hidden inputs once views.clj is
-   updated; URL builders only need to carry non-default state."
+   The original public shape is preserved: q/selected/visible-revision are
+   always present in the returned map, while board-option keys are included only
+   when they carry non-default state."
   [{:keys [search
            selected-request-id
            visible-revision
@@ -439,13 +439,21 @@
            mine-first?
            unclaimed-first?
            show-terminal?]}]
-  {search-param search
-   selected-param selected-request-id
-   visible-revision-param visible-revision
-   created-order-param (created-order-query-value created-order)
-   mine-first-param (when (truthy-value? mine-first?) "true")
-   unclaimed-first-param (when (truthy-value? unclaimed-first?) "true")
-   show-terminal-param (when (truthy-value? show-terminal?) "true")})
+  (let [created-order' (created-order-query-value created-order)]
+    (cond-> {search-param search
+             selected-param selected-request-id
+             visible-revision-param visible-revision}
+      (some? created-order')
+      (assoc created-order-param created-order')
+
+      (truthy-value? mine-first?)
+      (assoc mine-first-param "true")
+
+      (truthy-value? unclaimed-first?)
+      (assoc unclaimed-first-param "true")
+
+      (truthy-value? show-terminal?)
+      (assoc show-terminal-param "true"))))
 
 (defn request-route
   "Substitute request-id into a relative request route."
