@@ -22,11 +22,10 @@
   overflow: visible !important;
 }
 
-/* This is the important selector.
-   Browser clicks toggle <details open>; they do not update server-rendered
-   data-humanhelp-request-selected or inline selected styles. */
-[data-humanhelp-board] [data-humanhelp-request-card][open],
-[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-selected="true"] {
+/* The current visual selection is the native details open state.
+   Do not style server-rendered selected attrs here; they can become stale
+   after the user opens another request locally. */
+[data-humanhelp-board] [data-humanhelp-request-card][open] {
   position: relative;
   z-index: 1;
   overflow: visible !important;
@@ -38,14 +37,12 @@
     var(--shadow-lg) !important;
 }
 
-[data-humanhelp-board] [data-humanhelp-request-card][open] > summary,
-[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-selected="true"] > summary {
+[data-humanhelp-board] [data-humanhelp-request-card][open] > summary {
   background: transparent !important;
   color: var(--foreground) !important;
 }
 
-[data-humanhelp-board] [data-humanhelp-request-card][open] [data-accordion-chevron],
-[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-selected="true"] [data-accordion-chevron] {
+[data-humanhelp-board] [data-humanhelp-request-card][open] [data-accordion-chevron] {
   color: var(--chart-4) !important;
   opacity: 1 !important;
 }
