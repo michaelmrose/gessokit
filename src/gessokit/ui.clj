@@ -439,6 +439,8 @@
                     head
                     [[:script {:src (static-path "/js/gesso-theme.js")
                                :defer true}]
+                     [:script {:src (static-path "/js/gesso-live.js")
+                               :defer true}]
                      [:link {:rel "stylesheet"
                              :href (static-path "/css/main.css")}]
                      [:link {:rel "stylesheet"
