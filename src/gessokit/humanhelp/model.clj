@@ -8,6 +8,8 @@
    - submitted input normalization/validation
    - search matching
    - visible revision helpers
+   - board option normalization/sorting/filtering
+   - terminal fade/grace annotations
    - request transition rules
    - seed/reset state
    - XTDB read/write helpers
@@ -76,6 +78,25 @@
 
 (def request-customer-name-max
   80)
+
+(def default-created-order
+  :newest)
+
+(def default-mine-first?
+  false)
+
+(def default-unclaimed-first?
+  false)
+
+(def default-show-terminal?
+  false)
+
+(def terminal-fade-ms
+  "How long a newly terminal request remains visible on the active-only board.
+
+   The model owns this timing decision. Views may render the resulting
+   annotations, but they should not independently recompute fade eligibility."
+  10000)
 
 ;; -----------------------------------------------------------------------------
 ;; XTDB tables / ids
@@ -324,6 +345,7 @@
 
    [:request/created-at-ms int?]
    [:request/updated-at-ms int?]
+   [:request/terminal-at-ms {:optional true} [:maybe int?]]
 
    ;; Revision at which the request first became visible data.
    [:request/created-revision int?]
@@ -409,8 +431,65 @@
       requests))))
 
 ;; -----------------------------------------------------------------------------
-;; Search / visible board requests
+;; Search, terminal visibility, and board sorting
 ;; -----------------------------------------------------------------------------
+
+(defn truthy-param?
+  "Parse checkbox/form truth values.
+
+   Browser checkboxes commonly submit \"on\". Hidden state preservation may use
+   explicit \"true\"/\"false\" strings. Everything other than true/\"true\"/\"on\"/\"1\"
+   is false, including nil, \"false\", \"off\", and \"0\"."
+  [x]
+  (cond
+    (true? x)
+    true
+
+    (false? x)
+    false
+
+    (nil? x)
+    false
+
+    :else
+    (contains? #{"true" "on" "1"}
+               (-> x str str/trim str/lower-case))))
+
+(defn scalar-value
+  "Collapse repeated request/form values to the last submitted value.
+
+   Ring params may contain vectors when a browser submits repeated names. For
+   board view-state we generally want the last value, because visible controls
+   should override earlier hidden-preservation values when duplicates slip
+   through a route boundary."
+  [x]
+  (if (and (sequential? x)
+           (not (map? x))
+           (not (string? x)))
+    (last x)
+    x))
+
+(defn view-state-value
+  "Read a scalar view-state value by keyword or string key."
+  [m & ks]
+  (some (fn [k]
+          (let [v (scalar-value (request-param m k))]
+            (when (some? v)
+              v)))
+        ks))
+
+(defn show-terminal?
+  "True when terminal/history requests should be included normally.
+
+   Accepts normalized booleans and raw form/query values so lower-level helpers
+   remain safe in direct tests and future call paths."
+  [view-state]
+  (truthy-param?
+   (view-state-value view-state
+                     :show-terminal?
+                     :show-terminal
+                     "show-terminal?"
+                     "show-terminal")))
 
 (defn parse-search
   "Split a search string into lowercase search terms.
@@ -449,42 +528,280 @@
         haystack (request-search-text request)]
     (every? #(str/includes? haystack %) terms)))
 
+(defn terminal-fade-remaining-ms
+  "Return remaining terminal fade time for request, or nil.
+
+   This only reports a value for terminal requests. :request/terminal-at-ms is
+   the source of truth when present; :request/updated-at-ms is a compatibility
+   fallback for older data."
+  ([request]
+   (terminal-fade-remaining-ms (now-ms) request))
+  ([current-ms request]
+   (when (request-terminal? request)
+     (let [terminal-at (or (:request/terminal-at-ms request)
+                           (:request/updated-at-ms request))]
+       (when (some? terminal-at)
+         (let [remaining (- terminal-fade-ms
+                            (- current-ms terminal-at))]
+           (when (pos? remaining)
+             remaining)))))))
+
+(defn request-visible-by-terminal-filter?
+  "True when request passes the viewer's terminal visibility setting.
+
+   When :show-terminal? is true, all statuses remain visible and no fade
+   annotation should be applied. When false, active requests are visible plus
+   recently terminal requests still inside the fade grace period."
+  ([view-state request]
+   (request-visible-by-terminal-filter? (now-ms) view-state request))
+  ([current-ms view-state request]
+   (or (show-terminal? view-state)
+       (request-open? request)
+       (some? (terminal-fade-remaining-ms current-ms request)))))
+
 (defn filter-requests
-  "Filter requests by search and visible revision.
+  "Filter requests by visible revision, search, and terminal visibility.
 
-   view-state keys:
-     :search
-     :visible-revision"
-  [requests {:keys [search visible-revision]}]
-  (->> requests
-       (filter #(request-visible-at-revision? visible-revision %))
-       (filter #(request-matches-search? % search))
-       vec))
+   Filtering order:
+     1. visible revision
+     2. search
+     3. terminal visibility / terminal grace"
+  [requests view-state-or-env]
+  (let [{:keys [view-state]
+         supplied-now-ms :now-ms} (if (and (map? view-state-or-env)
+                                           (or (contains? view-state-or-env :view-state)
+                                               (contains? view-state-or-env :user)
+                                               (contains? view-state-or-env :now-ms)))
+                                    view-state-or-env
+                                    {:view-state view-state-or-env})
+        view-state' (or view-state {})
+        current-ms  (or supplied-now-ms (now-ms))]
+    (->> requests
+         (filter #(request-visible-at-revision?
+                   (:visible-revision view-state')
+                   %))
+         (filter #(request-matches-search? % (:search view-state')))
+         (filter #(request-visible-by-terminal-filter? current-ms view-state' %))
+         vec)))
 
-(defn sort-requests-for-board
-  "Sort request cards for the board.
+(defn true-first
+  [x]
+  (if x 0 1))
 
-   This preserves the current pre-filter-refactor behavior: open requests first,
-   then claimed requests, then terminal requests. Newer updated items within
-   each status group come first.
+(defn newest-created-key
+  [_env request]
+  (- (or (:request/number request) 0)))
 
-   The upcoming visibility/filter feature will intentionally change this to
-   strict newest-created-first ordering."
-  [requests]
+(defn oldest-created-key
+  [_env request]
+  (or (:request/number request) 0))
+
+(defn stable-request-id-key
+  [_env request]
+  (or (:request/id request) ""))
+
+(defn request-mine?
+  "True when request belongs to the current viewer for board sorting.
+
+   Mine means either:
+   - I created the request
+   - I have claimed the request."
+  [user request]
+  (or (request-owner? user request)
+      (request-claimed-by-user? user request)))
+
+(defn mine-first-key
+  [{:keys [user]} request]
+  (true-first
+   (request-mine? user request)))
+
+(defn unclaimed-first-key
+  [_env request]
+  (true-first
+   (and (= :open (:request/status request))
+        (nil? (:request/claimed-by request)))))
+
+(def request-created-order-methods
+  [{:order/id :newest
+    :order/label "Newest first"
+    :order/description "Newest created requests first."
+    :order/key newest-created-key}
+
+   {:order/id :oldest
+    :order/label "Oldest first"
+    :order/description "Oldest created requests first."
+    :order/key oldest-created-key}])
+
+(def request-created-order-methods-by-id
+  (into {}
+        (map (juxt :order/id identity))
+        request-created-order-methods))
+
+(defn normalize-created-order
+  [x]
+  (let [created-order (cond
+                        (keyword? x) x
+                        (present? x) (keyword (normalize-token x))
+                        :else nil)]
+    (if (contains? request-created-order-methods-by-id created-order)
+      created-order
+      default-created-order)))
+
+(defn created-order-method
+  [created-order]
+  (or (get request-created-order-methods-by-id
+           (normalize-created-order created-order))
+      (get request-created-order-methods-by-id default-created-order)))
+
+(def request-priority-sort-keys
+  [{:priority/id :mine-first
+    :priority/label "Mine first"
+    :priority/description "Requests claimed by me or created by me first."
+    :priority/enabled-key :mine-first?
+    :priority/key mine-first-key}
+
+   {:priority/id :unclaimed-first
+    :priority/label "Unclaimed first"
+    :priority/description "Requests nobody has claimed first."
+    :priority/enabled-key :unclaimed-first?
+    :priority/key unclaimed-first-key}])
+
+(defn enabled-priority-sort-keys
+  [view-state]
+  (->> request-priority-sort-keys
+       (filter #(truthy-param? (get view-state (:priority/enabled-key %))))
+       (map :priority/key)))
+
+(defn active-request-sort-key
+  "Return a request -> vector key fn for the active board sort.
+
+   Priority precedence is defined by the order of request-priority-sort-keys.
+   The base created-order key comes after enabled priorities, followed by a
+   stable id tie-breaker."
+  [{:keys [view-state] :as env}]
+  (let [view-state' (or view-state {})
+        base-key    (:order/key
+                     (created-order-method (:created-order view-state')))
+        key-fns     (concat
+                     (enabled-priority-sort-keys view-state')
+                     [base-key stable-request-id-key])]
+    (fn [request]
+      (mapv #(% env request) key-fns))))
+
+(defn normalize-board-env
+  "Normalize either a view-state map or {:user ... :view-state ... :now-ms ...}."
+  [view-state-or-env]
+  (if (and (map? view-state-or-env)
+           (or (contains? view-state-or-env :view-state)
+               (contains? view-state-or-env :user)
+               (contains? view-state-or-env :now-ms)))
+    view-state-or-env
+    {:view-state view-state-or-env}))
+
+(defn legacy-status-sort-key
+  "Compatibility sort key for the pre-board-options public one-arity helper.
+
+   New board rendering uses sort-requests-for-board with an explicit view-state
+   or board env. The one-arity form is retained so older tests/callers do not
+   fail with an arity error while the feature lands namespace-by-namespace."
+  [request]
   (let [rank {:open 0
               :claimed 1
               :done 2
               :cancelled 3}]
-    (->> requests
-         (sort-by (fn [request]
-                    [(get rank (:request/status request) 99)
-                     (- (or (:request/updated-at-ms request) 0))]))
-         vec)))
+    [(get rank (:request/status request) 99)
+     (- (or (:request/updated-at-ms request) 0))]))
+
+(defn sort-requests-for-board
+  "Sort request cards using the active viewer board options.
+
+   The two-arity form is the feature path. The one-arity form preserves the old
+   status/updated-at ordering for compatibility with existing direct callers."
+  ([requests]
+   (->> requests
+        (sort-by legacy-status-sort-key)
+        vec))
+  ([requests view-state-or-env]
+   (let [env (normalize-board-env view-state-or-env)]
+     (->> requests
+          (sort-by (active-request-sort-key env))
+          vec))))
+
+(defn annotate-board-request
+  "Attach board-only metadata used by views.
+
+   Fading is intentionally only annotated in active-only mode. If the viewer has
+   enabled terminal/history visibility, terminal cards are ordinary visible
+   history and should not look like they are leaving."
+  [current-ms view-state request]
+  (if-let [remaining (when-not (show-terminal? view-state)
+                       (terminal-fade-remaining-ms current-ms request))]
+    (assoc request
+           :board/fading-terminal? true
+           :board/terminal-fade-remaining-ms remaining)
+    (dissoc request
+            :board/fading-terminal?
+            :board/terminal-fade-remaining-ms)))
+
+(defn annotate-board-requests
+  [requests view-state-or-env]
+  (let [{:keys [view-state]
+         supplied-now-ms :now-ms} (normalize-board-env view-state-or-env)
+        view-state' (or view-state {})
+        current-ms  (or supplied-now-ms (now-ms))]
+    (mapv #(annotate-board-request current-ms view-state' %)
+          requests)))
 
 (defn visible-board-requests
-  [requests view-state]
-  (sort-requests-for-board
-   (filter-requests requests view-state)))
+  [requests view-state-or-env]
+  (let [env (normalize-board-env view-state-or-env)]
+    (-> requests
+        (filter-requests env)
+        (sort-requests-for-board env)
+        (annotate-board-requests env))))
+
+(defn next-prune-ms
+  "Return the soonest fade expiration among rendered requests, or nil."
+  [requests]
+  (some->> requests
+           (keep :board/terminal-fade-remaining-ms)
+           seq
+           (apply min)
+           (max 1)))
+
+(defn created-order-options
+  "Return GUI-safe created-order metadata, omitting function values."
+  [active-created-order]
+  (let [active-created-order (normalize-created-order active-created-order)]
+    (mapv (fn [{:order/keys [id label description]}]
+            {:id id
+             :label label
+             :description description
+             :active? (= id active-created-order)})
+          request-created-order-methods)))
+
+(defn priority-sort-options
+  "Return GUI-safe priority sort metadata, omitting function values."
+  [view-state]
+  (mapv (fn [{:priority/keys [id label description enabled-key]}]
+          {:id id
+           :label label
+           :description description
+           :enabled-key enabled-key
+           :checked? (truthy-param? (get view-state enabled-key))})
+        request-priority-sort-keys))
+
+(defn terminal-visibility-option
+  "Return GUI-safe terminal visibility metadata.
+
+   This is intentionally separate from sort metadata: terminal visibility is a
+   filter/visibility option, not an ordering option."
+  [view-state]
+  {:id :show-terminal
+   :label "Show done and cancelled"
+   :description "Include closed requests in the board instead of showing only active requests."
+   :enabled-key :show-terminal?
+   :checked? (show-terminal? view-state)})
 
 ;; -----------------------------------------------------------------------------
 ;; Time labels
@@ -592,8 +909,12 @@
    :request/claimed-by-email nil})
 
 (defn terminal-fields
-  [status]
-  {:request/status status})
+  ([status]
+   {:request/status status})
+  ([status terminal-at-ms]
+   (cond-> {:request/status status}
+     (some? terminal-at-ms)
+     (assoc :request/terminal-at-ms terminal-at-ms))))
 
 (defn transition-request
   "Apply a lifecycle transition to a request.
@@ -637,10 +958,10 @@
                (claim-fields user)
 
                :done
-               (terminal-fields :done)
+               (terminal-fields :done now-ms')
 
                :cancel
-               (terminal-fields :cancelled))
+               (terminal-fields :cancelled now-ms'))
 
              request' (merge request
                              patch
@@ -715,10 +1036,14 @@
            claimed-by
            claimed-by-email
            created-offset-ms
+           terminal-at-ms
            revision]}]
-  (let [created-at (- seed-now-ms (or created-offset-ms 0))
-        id         (request-id number)
-        revision'  (or revision number)]
+  (let [created-at       (- seed-now-ms (or created-offset-ms 0))
+        id               (request-id number)
+        revision'        (or revision number)
+        terminal-at-ms'  (or terminal-at-ms
+                             (when (contains? terminal-statuses status)
+                               (- seed-now-ms (* 2 terminal-fade-ms))))]
     {:request/id id
      :request/number number
      :request/store-id store-id
@@ -732,6 +1057,7 @@
      :request/claimed-by-email claimed-by-email
      :request/created-at-ms created-at
      :request/updated-at-ms created-at
+     :request/terminal-at-ms terminal-at-ms'
      :request/created-revision revision'
      :request/updated-revision revision'}))
 
@@ -869,6 +1195,7 @@
    :request/claimed-by-email
    :request/created-at-ms
    :request/updated-at-ms
+   :request/terminal-at-ms
    :request/created-revision
    :request/updated-revision])
 
@@ -1086,13 +1413,6 @@
   ([ctx n]
    (take n (all-events ctx))))
 
-(defn board-requests
-  "Return visible request cards for a view-state."
-  [ctx view-state]
-  (visible-board-requests
-   (all-requests ctx)
-   view-state))
-
 (defn summary
   [ctx]
   (let [requests (all-requests ctx)]
@@ -1184,6 +1504,7 @@
                        :request/claimed-by-email nil
                        :request/created-at-ms now
                        :request/updated-at-ms now
+                       :request/terminal-at-ms nil
                        :request/created-revision revision
                        :request/updated-revision revision}]
     [(-> state
@@ -1384,6 +1705,13 @@
     (when-not (str/blank? selected')
       selected')))
 
+(defn normalize-visible-revision
+  [ctx visible-revision]
+  (if (some? visible-revision)
+    (or (parse-visible-revision visible-revision)
+        (initial-visible-revision ctx))
+    (initial-visible-revision ctx)))
+
 (defn normalize-view-state
   "Fill default view-state values from current persisted Human Help data.
 
@@ -1394,36 +1722,109 @@
    Always returns a complete shape:
      {:search ...
       :selected-request-id ...
-      :visible-revision ...}"
+      :visible-revision ...
+      :created-order ...
+      :mine-first? ...
+      :unclaimed-first? ...
+      :show-terminal? ...}"
   [ctx view-state]
   (let [view-state' (or view-state {})]
-    {:search (normalize-search (:search view-state'))
+    {:search (normalize-search
+              (view-state-value view-state' :search :q "q"))
      :selected-request-id (normalize-selected-request-id
-                           (:selected-request-id view-state'))
-     :visible-revision (if (some? (:visible-revision view-state'))
-                         (:visible-revision view-state')
-                         (initial-visible-revision ctx))}))
+                           (view-state-value view-state'
+                                             :selected-request-id
+                                             :selected
+                                             "selected"))
+     :visible-revision (normalize-visible-revision
+                        ctx
+                        (view-state-value view-state'
+                                          :visible-revision
+                                          "visible-revision"))
+     :created-order (normalize-created-order
+                     (view-state-value view-state'
+                                       :created-order
+                                       "created-order"))
+     :mine-first? (truthy-param?
+                   (view-state-value view-state'
+                                     :mine-first?
+                                     :mine-first
+                                     "mine-first?"
+                                     "mine-first"))
+     :unclaimed-first? (truthy-param?
+                        (view-state-value view-state'
+                                          :unclaimed-first?
+                                          :unclaimed-first
+                                          "unclaimed-first?"
+                                          "unclaimed-first"))
+     :show-terminal? (truthy-param?
+                      (view-state-value view-state'
+                                        :show-terminal?
+                                        :show-terminal
+                                        "show-terminal?"
+                                        "show-terminal"))}))
+
+(defn normalize-board-data-arg
+  "Accept either legacy view-state or {:user ... :view-state ... :now-ms ...}."
+  [arg]
+  (if (and (map? arg)
+           (or (contains? arg :view-state)
+               (contains? arg :user)
+               (contains? arg :now-ms)))
+    arg
+    {:view-state arg}))
+
+(defn board-option-metadata
+  [view-state]
+  {:created-order-options (created-order-options (:created-order view-state))
+   :priority-sort-options (priority-sort-options view-state)
+   :terminal-visibility-option (terminal-visibility-option view-state)})
+
+(defn board-requests
+  "Return visible request cards for a view-state or board env."
+  [ctx arg]
+  (let [{:keys [user view-state]
+         supplied-now-ms :now-ms} (normalize-board-data-arg arg)
+        view-state' (normalize-view-state ctx view-state)]
+    (visible-board-requests
+     (all-requests ctx)
+     {:user user
+      :view-state view-state'
+      :now-ms supplied-now-ms})))
 
 (defn board-data
-  "Return the data needed to render the request board for view-state."
-  [ctx view-state]
-  (let [view-state'      (normalize-view-state ctx view-state)
+  "Return the data needed to render the request board for view-state.
+
+   The preferred second argument is {:user user :view-state view-state}. A bare
+   view-state map is still accepted for existing call sites while the app/live
+   namespaces are migrated."
+  [ctx arg]
+  (let [{:keys [user view-state]
+         supplied-now-ms :now-ms} (normalize-board-data-arg arg)
+        view-state'      (normalize-view-state ctx view-state)
         requests         (all-requests ctx)
         latest-revision' (latest-revision ctx)
-        visible-revision (:visible-revision view-state')]
-    {:store/id store-id
-     :store/name store-name
-     :view-state view-state'
-     :latest-revision latest-revision'
-     :visible-revision visible-revision
-     :stale? (board-stale? visible-revision latest-revision')
-     :open-count (open-request-count requests)
-     :pending-open-count (pending-open-request-count
+        visible-revision (:visible-revision view-state')
+        current-ms       (or supplied-now-ms (now-ms))
+        visible-requests (visible-board-requests
                           requests
-                          visible-revision)
-     :requests (visible-board-requests
-                requests
-                view-state')}))
+                          {:user user
+                           :view-state view-state'
+                           :now-ms current-ms})]
+    (merge
+     {:store/id store-id
+      :store/name store-name
+      :view-state view-state'
+      :latest-revision latest-revision'
+      :visible-revision visible-revision
+      :stale? (board-stale? visible-revision latest-revision')
+      :open-count (open-request-count requests)
+      :pending-open-count (pending-open-request-count
+                           requests
+                           visible-revision)
+      :requests visible-requests
+      :next-prune-ms (next-prune-ms visible-requests)}
+     (board-option-metadata view-state'))))
 
 (defn toolbar-data
   "Return the data needed to render the request toolbar.
@@ -1431,23 +1832,30 @@
    Toolbar staleness means there are newly-created open requests that are not
    part of the viewer's current visible revision. Lifecycle-only changes such
    as claim/unclaim/done/cancel should update visible cards in place, but should
-   not light the manual refresh affordance."
-  [ctx view-state]
-  (let [view-state'         (normalize-view-state ctx view-state)
+   not light the manual refresh affordance.
+
+   The preferred second argument is {:user user :view-state view-state}. A bare
+   view-state map is still accepted for existing call sites while the app/live
+   namespaces are migrated."
+  [ctx arg]
+  (let [{:keys [view-state]} (normalize-board-data-arg arg)
+        view-state'         (normalize-view-state ctx view-state)
         requests            (all-requests ctx)
         latest-revision'    (latest-revision ctx)
         visible-revision    (:visible-revision view-state')
         pending-open-count' (pending-open-request-count
                              requests
                              visible-revision)]
-    {:store/id store-id
-     :store/name store-name
-     :view-state view-state'
-     :latest-revision latest-revision'
-     :visible-revision visible-revision
-     :stale? (pos? pending-open-count')
-     :open-count (open-request-count requests)
-     :pending-open-count pending-open-count'}))
+    (merge
+     {:store/id store-id
+      :store/name store-name
+      :view-state view-state'
+      :latest-revision latest-revision'
+      :visible-revision visible-revision
+      :stale? (pos? pending-open-count')
+      :open-count (open-request-count requests)
+      :pending-open-count pending-open-count'}
+     (board-option-metadata view-state'))))
 
 ;; -----------------------------------------------------------------------------
 ;; Reset

@@ -1,4 +1,10 @@
-(ns gessokit.humanhelp.components.request-card.attr)
+(ns gessokit.humanhelp.components.request-card.attr
+  (:require
+   [clojure.string :as str]))
+
+(def terminal-statuses
+  #{:done
+    :cancelled})
 
 (defn- compact-style
   [m]
@@ -6,30 +12,79 @@
         (remove (comp nil? val))
         m))
 
+(defn- compact-attrs
+  [m]
+  (into {}
+        (remove (comp nil? val))
+        m))
+
+(defn- classes
+  [& xs]
+  (->> xs
+       flatten
+       (remove nil?)
+       (map str)
+       (remove str/blank?)
+       (str/join " ")))
+
+(defn terminal-request?
+  [request]
+  (contains? terminal-statuses (:request/status request)))
+
+(defn fading-terminal?
+  [request]
+  (true? (:board/fading-terminal? request)))
+
+(defn terminal-fade-remaining-ms
+  [request]
+  (:board/terminal-fade-remaining-ms request))
+
 (defn card-surface
   []
   "color-mix(in srgb, var(--background) 82%, var(--card) 18%)")
 
-(defn card-style
+(defn terminal-card-surface
   []
-  (compact-style
-   {:position "relative"
-    :border-style "solid"
-    :border-width "1px"
-    :border-color "color-mix(in srgb, var(--border) 80%, transparent)"
-    :background (card-surface)
-    :color "var(--foreground)"
-    :box-shadow "var(--shadow-sm)"}))
+  "color-mix(in srgb, var(--background) 90%, var(--muted) 10%)")
+
+(defn card-style
+  ([]
+   (card-style nil))
+  ([request]
+   (compact-style
+    {:position "relative"
+     :border-style "solid"
+     :border-width "1px"
+     :border-color "color-mix(in srgb, var(--border) 80%, transparent)"
+     :background (if (terminal-request? request)
+                   (terminal-card-surface)
+                   (card-surface))
+     :color "var(--foreground)"
+     :box-shadow "var(--shadow-sm)"
+     :--humanhelp-terminal-fade-ms (when-let [remaining-ms (terminal-fade-remaining-ms request)]
+                                     (str remaining-ms "ms"))})))
 
 (defn item-class
-  []
-  "radius-xl border-theme transition-all")
+  ([]
+   (item-class nil nil))
+  ([request _open?]
+   (classes
+    "radius-xl border-theme transition-all"
+    (when (terminal-request? request)
+      "humanhelp-request-card--terminal")
+    (when (fading-terminal? request)
+      "humanhelp-request-card--fading-terminal"))))
 
 (defn item-attrs
-  [request _open?]
-  {:id (str "humanhelp-request-" (:request/id request))
-   :data-humanhelp-request-card true
-   :style (card-style)})
+  [request open?]
+  (compact-attrs
+   {:id (str "humanhelp-request-" (:request/id request))
+    :data-humanhelp-request-card true
+    :data-humanhelp-request-selected (when open? "true")
+    :data-humanhelp-request-terminal (when (terminal-request? request) "true")
+    :data-humanhelp-request-fading-terminal (when (fading-terminal? request) "true")
+    :data-terminal-fade-remaining-ms (terminal-fade-remaining-ms request)
+    :style (card-style request)}))
 
 (defn summary-attrs
   []
@@ -84,10 +139,12 @@
            :border-top "0"}})
 
 (defn action-form-attrs
-  [{:keys [to attrs]}]
+  [{:keys [to board-state-selector attrs]}]
   (merge
-   {:method "post"
-    :hx-post to
-    :hx-swap "none"
-    :class "inline-flex"}
+   (compact-attrs
+    {:method "post"
+     :hx-post to
+     :hx-swap "none"
+     :hx-include board-state-selector
+     :class "inline-flex"})
    attrs))

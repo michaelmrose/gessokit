@@ -81,18 +81,18 @@
 (defn- request-view-state
   "Extract request-board view state from request params.
 
-   Important fields:
-   - :search
-   - :selected-request-id
-   - :visible-revision
-
-   model/normalize-view-state fills defaults against the current persisted
-   Human Help state."
+   app.clj owns HTTP parameter extraction only. It does not validate sort/filter
+   values or decide their semantics; model/normalize-view-state fills defaults
+   and normalizes option values against current persisted Human Help data."
   [ctx]
-  {:search (or (param ctx :q) "")
-   :selected-request-id (param ctx :selected)
+  {:search (or (param ctx routes/search-param) "")
+   :selected-request-id (param ctx routes/selected-param)
    :visible-revision (model/parse-visible-revision
-                      (param ctx :visible-revision))})
+                      (param ctx routes/visible-revision-param))
+   :created-order (param ctx routes/created-order-param)
+   :mine-first? (param ctx routes/mine-first-param)
+   :unclaimed-first? (param ctx routes/unclaimed-first-param)
+   :show-terminal? (param ctx routes/show-terminal-param)})
 
 (defn- normalized-view-state
   [ctx view-state]
@@ -194,26 +194,28 @@
                 {:ctx-keys (when (map? ctx)
                              (set (keys ctx)))}))))
 
+(defn- board-render-options
+  [ctx view-state]
+  {:user (current-user ctx)
+   :view-state view-state})
+
 (defn- fragment-render-options
   [ctx]
-  {:user (current-user ctx)
-   :view-state (request-view-state ctx)})
+  (board-render-options ctx (request-view-state ctx)))
 
 (defn- render-toolbar-node
   [ctx view-state]
   (app-live/render-fragment-node
    ctx
    :request-toolbar
-   {:user (current-user ctx)
-    :view-state view-state}))
+   (board-render-options ctx view-state)))
 
 (defn- render-list-node
   [ctx view-state]
   (app-live/render-fragment-node
    ctx
    :request-list
-   {:user (current-user ctx)
-    :view-state view-state}))
+   (board-render-options ctx view-state)))
 
 (defn- board-fragments
   [ctx view-state]
@@ -484,6 +486,22 @@
   [ctx]
   (request-list-fragment ctx))
 
+(defn apply-board-options
+  "Apply request-board sort/filter options without mutating persisted state.
+
+   The board-options dialog submits current search/selection/revision from the
+   stable board-state form plus its own visible option controls. The response
+   replaces board state first, then toolbar and request list, so subsequent
+   requests preserve the newly-applied options."
+  [ctx]
+  (let [view-state (normalized-view-state ctx (request-view-state ctx))]
+    (html
+     (with-board-state-oob
+       ctx
+       view-state
+       (views/refreshed-request-board-fragments
+        (board-fragments ctx view-state))))))
+
 (defn select-request
   "Render the request list with one selected/expanded card and sync board state.
 
@@ -637,6 +655,7 @@
    routes/create-request-id create-request!
    routes/refresh-requests-id refresh-requests!
    routes/search-requests-id search-requests
+   routes/apply-board-options-id apply-board-options
    routes/select-request-id select-request
 
    routes/claim-request-id claim-request!

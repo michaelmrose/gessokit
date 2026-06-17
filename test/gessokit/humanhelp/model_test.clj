@@ -83,6 +83,7 @@
     :request/claimed-by-email nil
     :request/created-at-ms 1000000
     :request/updated-at-ms 1000000
+    :request/terminal-at-ms nil
     :request/created-revision 1
     :request/updated-revision 1}
    overrides))
@@ -138,6 +139,8 @@
    (contains? valid-statuses (:request/status request))
    (integer? (:request/created-at-ms request))
    (integer? (:request/updated-at-ms request))
+   (or (nil? (:request/terminal-at-ms request))
+       (integer? (:request/terminal-at-ms request)))
    (integer? (:request/created-revision request))
    (integer? (:request/updated-revision request))))
 
@@ -242,6 +245,12 @@
   (is (= #{:done :cancelled} model/terminal-statuses))
   (is (= [:claim :unclaim :take-over :done :cancel]
          model/lifecycle-actions))
+  (is (= :newest model/default-created-order))
+  (is (false? model/default-mine-first?))
+  (is (false? model/default-unclaimed-first?))
+  (is (false? model/default-show-terminal?))
+  (is (integer? model/terminal-fade-ms))
+  (is (pos? model/terminal-fade-ms))
   (doseq [limit [model/request-title-max
                  model/request-area-max
                  model/request-details-max
@@ -307,6 +316,37 @@
   (is (nil? (model/parse-visible-revision "abc")))
   (is (= 3 (model/parse-visible-revision "3")))
   (is (= 3 (model/parse-visible-revision 3))))
+
+(deftest truthy-param-test
+  (doseq [v [true "true" " TRUE " "on" "1"]]
+    (is (true? (model/truthy-param? v))))
+  (doseq [v [false nil "" "false" "off" "0" "yes"]]
+    (is (false? (model/truthy-param? v)))))
+
+(deftest scalar-value-test
+  (is (nil? (model/scalar-value nil)))
+  (is (= "x" (model/scalar-value "x")))
+  (is (= "last" (model/scalar-value ["first" "last"])))
+  (is (= "" (model/scalar-value ["old" ""])))
+  (is (= {:a 1} (model/scalar-value {:a 1}))))
+
+(deftest view-state-value-test
+  (let [view-state {:search "keyword search"
+                    "q" "string search"
+                    :mine-first? ["false" "true"]}]
+    (is (= "keyword search"
+           (model/view-state-value view-state :search "q")))
+    (is (= "string search"
+           (model/view-state-value view-state :missing "q")))
+    (is (= "true"
+           (model/view-state-value view-state :mine-first?)))
+    (is (nil? (model/view-state-value view-state :missing "missing")))))
+
+(deftest show-terminal-test
+  (is (true? (model/show-terminal? {:show-terminal? true})))
+  (is (true? (model/show-terminal? {"show-terminal" "on"})))
+  (is (false? (model/show-terminal? {:show-terminal? false})))
+  (is (false? (model/show-terminal? {"show-terminal" "false"}))))
 
 (deftest now-ms-test
   (let [before (System/currentTimeMillis)
@@ -581,97 +621,220 @@
     (is (false? (model/request-matches-search? r "rak gar xyz")))))
 
 (deftest filter-requests-test
-  (let [r1 (req {:request/id "r1"
+  (let [now 100000
+        r1 (req {:request/id "r1"
                  :request/title "Need a rake"
                  :request/area "Garden"
+                 :request/status :open
                  :request/created-revision 1})
         r2 (req {:request/id "r2"
                  :request/title "Need blue paint"
                  :request/area "Paint"
+                 :request/status :open
                  :request/created-revision 2})
         r3 (req {:request/id "r3"
                  :request/title "Need mulch"
                  :request/area "Garden"
-                 :request/created-revision 5})]
-    (is (= ["r1"]
-           (request-ids
-            (model/filter-requests
-             [r1 r2 r3]
-             {:search "garden"
-              :visible-revision 3}))))
-    (is (= ["r1" "r3"]
-           (request-ids
-            (model/filter-requests
-             [r1 r2 r3]
-             {:search "garden"
-              :visible-revision nil}))))))
+                 :request/status :open
+                 :request/created-revision 5})
+        terminal-old (req {:request/id "terminal-old"
+                           :request/title "Need garden soil"
+                           :request/area "Garden"
+                           :request/status :done
+                           :request/terminal-at-ms (- now model/terminal-fade-ms 1)
+                           :request/created-revision 1})
+        terminal-recent (req {:request/id "terminal-recent"
+                              :request/title "Need garden hose"
+                              :request/area "Garden"
+                              :request/status :done
+                              :request/terminal-at-ms (- now 1000)
+                              :request/created-revision 1})]
+    (testing "visible revision and search are applied before terminal visibility"
+      (is (= ["r1"]
+             (request-ids
+              (model/filter-requests
+               [r1 r2 r3]
+               {:search "garden"
+                :visible-revision 3}))))
+      (is (= ["r1" "r3"]
+             (request-ids
+              (model/filter-requests
+               [r1 r2 r3]
+               {:search "garden"
+                :visible-revision nil})))))
 
-;; -----------------------------------------------------------------------------
-;; Sorting and visible board
-;; -----------------------------------------------------------------------------
+    (testing "terminal requests are hidden by default unless they are still fading"
+      (is (= ["r1" "terminal-recent"]
+             (request-ids
+              (model/filter-requests
+               [r1 terminal-old terminal-recent]
+               {:view-state {:search "garden"
+                             :visible-revision nil}
+                :now-ms now})))))
+
+    (testing "show-terminal includes terminal requests regardless of fade age"
+      (is (= ["r1" "terminal-old" "terminal-recent"]
+             (request-ids
+              (model/filter-requests
+               [r1 terminal-old terminal-recent]
+               {:view-state {:search "garden"
+                             :visible-revision nil
+                             :show-terminal? true}
+                :now-ms now})))))))
 
 (deftest sort-requests-for-board-test
-  (let [open-old (req {:request/id "open-old"
+  (let [old-open (req {:request/id "old-open"
+                       :request/number 1
                        :request/status :open
-                       :request/updated-at-ms 1000})
-        open-new (req {:request/id "open-new"
-                       :request/status :open
-                       :request/updated-at-ms 3000})
-        claimed (req {:request/id "claimed"
-                      :request/status :claimed
-                      :request/updated-at-ms 2000})
+                       :request/updated-at-ms 9000})
+        unclaimed-new (req {:request/id "unclaimed-new"
+                            :request/number 6
+                            :request/status :open
+                            :request/claimed-by nil
+                            :request/updated-at-ms 1000})
+        mine (req {:request/id "mine"
+                   :request/number 3
+                   :request/status :claimed
+                   :request/claimed-by "user-helper"
+                   :request/claimed-by-email "helper@example.com"})
+        mine-created (req {:request/id "mine-created"
+                           :request/number 2
+                           :request/status :open
+                           :request/customer-user-id "user-helper"
+                           :request/claimed-by nil
+                           :request/claimed-by-email nil})
+        other-claimed (req {:request/id "other-claimed"
+                            :request/number 5
+                            :request/status :claimed
+                            :request/claimed-by "user-other"
+                            :request/claimed-by-email "other@example.com"})
         done (req {:request/id "done"
-                   :request/status :done
-                   :request/updated-at-ms 5000})
-        cancelled (req {:request/id "cancelled"
-                        :request/status :cancelled
-                        :request/updated-at-ms 6000})]
-    (is (= ["open-new" "open-old" "claimed" "done" "cancelled"]
-           (request-ids
-            (model/sort-requests-for-board
-             [cancelled done open-new claimed open-old]))))))
+                   :request/number 4
+                   :request/status :done})
+        requests [old-open done other-claimed unclaimed-new mine mine-created]]
+
+    (testing "default sort is newest-created first with stable id tie-breaker"
+      (is (= ["unclaimed-new" "other-claimed" "done" "mine" "mine-created" "old-open"]
+             (request-ids
+              (model/sort-requests-for-board
+               requests
+               {:view-state {:created-order :newest}})))))
+
+    (testing "oldest created order is selectable"
+      (is (= ["old-open" "mine-created" "mine" "done" "other-claimed" "unclaimed-new"]
+             (request-ids
+              (model/sort-requests-for-board
+               requests
+               {:view-state {:created-order :oldest}})))))
+
+    (testing "mine-first is a priority sort key before created order"
+      (is (= ["mine" "mine-created" "unclaimed-new" "other-claimed" "done" "old-open"]
+             (request-ids
+              (model/sort-requests-for-board
+               requests
+               {:user user-helper
+                :view-state {:created-order :newest
+                             :mine-first? true}})))))
+
+    (testing "unclaimed-first is a priority sort key before created order"
+      (is (= ["unclaimed-new" "mine-created" "old-open" "other-claimed" "done" "mine"]
+             (request-ids
+              (model/sort-requests-for-board
+               requests
+               {:user user-helper
+                :view-state {:created-order :newest
+                             :unclaimed-first? true}})))))
+
+    (testing "priority key order is code-defined: mine first, then unclaimed"
+      (is (= ["mine-created" "mine" "unclaimed-new" "old-open" "other-claimed" "done"]
+             (request-ids
+              (model/sort-requests-for-board
+               requests
+               {:user user-helper
+                :view-state {:created-order :newest
+                             :mine-first? true
+                             :unclaimed-first? true}})))))))
 
 (deftest visible-board-requests-test
-  (let [r1 (req {:request/id "r1"
+  (let [now 100000
+        r1 (req {:request/id "r1"
+                 :request/number 1
                  :request/title "Need rake"
                  :request/area "Garden"
                  :request/status :open
                  :request/updated-at-ms 1000
                  :request/created-revision 1})
         r2 (req {:request/id "r2"
+                 :request/number 2
                  :request/title "Need paint"
                  :request/area "Paint"
                  :request/status :open
                  :request/updated-at-ms 2000
                  :request/created-revision 2})
         r3 (req {:request/id "r3"
+                 :request/number 3
                  :request/title "Need mulch"
                  :request/area "Garden"
                  :request/status :done
+                 :request/terminal-at-ms (- now model/terminal-fade-ms 1)
                  :request/updated-at-ms 3000
                  :request/created-revision 3})
         r4 (req {:request/id "r4"
+                 :request/number 4
                  :request/title "Need gloves"
                  :request/area "Garden"
                  :request/status :open
                  :request/updated-at-ms 4000
-                 :request/created-revision 4})]
-    (is (= ["r1" "r3"]
-           (request-ids
-            (model/visible-board-requests
-             [r1 r2 r3 r4]
-             {:search "garden"
-              :visible-revision 3}))))
-    (is (= ["r4" "r1" "r3"]
-           (request-ids
-            (model/visible-board-requests
-             [r1 r2 r3 r4]
-             {:search "garden"
-              :visible-revision 4}))))))
+                 :request/created-revision 4})
+        recent-terminal (req {:request/id "recent-terminal"
+                              :request/number 5
+                              :request/title "Need garden cart"
+                              :request/area "Garden"
+                              :request/status :cancelled
+                              :request/terminal-at-ms (- now 1000)
+                              :request/updated-at-ms 5000
+                              :request/created-revision 5})]
 
-;; -----------------------------------------------------------------------------
-;; Time labels
-;; -----------------------------------------------------------------------------
+    (testing "default board hides old terminal requests"
+      (is (= ["r1"]
+             (request-ids
+              (model/visible-board-requests
+               [r1 r2 r3 r4]
+               {:view-state {:search "garden"
+                             :visible-revision 3}
+                :now-ms now}))))
+      (is (= ["r4" "r1"]
+             (request-ids
+              (model/visible-board-requests
+               [r1 r2 r3 r4]
+               {:view-state {:search "garden"
+                             :visible-revision 4}
+                :now-ms now})))))
+
+    (testing "show-terminal includes done/cancelled requests as ordinary history"
+      (let [requests (model/visible-board-requests
+                      [r1 r2 r3 r4]
+                      {:view-state {:search "garden"
+                                    :visible-revision 4
+                                    :show-terminal? true}
+                       :now-ms now})]
+        (is (= ["r4" "r3" "r1"]
+               (request-ids requests)))
+        (is (not-any? :board/fading-terminal? requests))))
+
+    (testing "recent terminal requests stay visible during fade grace"
+      (let [requests (model/visible-board-requests
+                      [r1 r2 r3 r4 recent-terminal]
+                      {:view-state {:search "garden"
+                                    :visible-revision 5}
+                       :now-ms now})
+            by-id (requests-by-id requests)]
+        (is (= ["recent-terminal" "r4" "r1"]
+               (request-ids requests)))
+        (is (true? (get-in by-id ["recent-terminal" :board/fading-terminal?])))
+        (is (= 1000
+               (- model/terminal-fade-ms
+                  (get-in by-id ["recent-terminal" :board/terminal-fade-remaining-ms]))))))))
 
 (deftest elapsed-minutes-test
   (is (= 0 (model/elapsed-minutes 1000 1000)))
@@ -823,12 +986,15 @@
                          :request/customer-user-id "user-owner"})
         claimed-by-helper (req {:request/status :claimed
                                 :request/claimed-by "user-helper"})]
-    (is (= :ok
-           (:status (model/transition-request
-                     owned-open
-                     :done
-                     user-owner
-                     {:revision 7}))))
+    (let [result (model/transition-request
+                  owned-open
+                  :done
+                  user-owner
+                  {:now-ms 2000000
+                   :revision 7})]
+      (is (= :ok (:status result)))
+      (is (= :done (get-in result [:request :request/status])))
+      (is (= 2000000 (get-in result [:request :request/terminal-at-ms]))))
     (is (= :ok
            (:status (model/transition-request
                      claimed-by-helper
@@ -847,12 +1013,15 @@
                          :request/customer-user-id "user-owner"})
         claimed-by-helper (req {:request/status :claimed
                                 :request/claimed-by "user-helper"})]
-    (is (= :ok
-           (:status (model/transition-request
-                     owned-open
-                     :cancel
-                     user-owner
-                     {:revision 7}))))
+    (let [result (model/transition-request
+                  owned-open
+                  :cancel
+                  user-owner
+                  {:now-ms 2000000
+                   :revision 7})]
+      (is (= :ok (:status result)))
+      (is (= :cancelled (get-in result [:request :request/status])))
+      (is (= 2000000 (get-in result [:request :request/terminal-at-ms]))))
     (is (= :ok
            (:status (model/transition-request
                      claimed-by-helper
@@ -911,11 +1080,8 @@
         request' (:request result)]
     (is (= :ok (:status result)))
     (is (= 11 (:request/updated-revision request')))
-    (is (<= before (:request/updated-at-ms request') after))))
-
-;; -----------------------------------------------------------------------------
-;; Patch helpers and action messages
-;; -----------------------------------------------------------------------------
+    (is (<= before (:request/updated-at-ms request') after))
+    (is (<= before (:request/terminal-at-ms request') after))))
 
 (deftest patch-helper-test
   (is (= {:request/status :claimed
@@ -928,8 +1094,11 @@
           :request/claimed-by-email nil}
          (model/clear-claim-fields)))
 
-  (is (= {:request/status :done}
-         (model/terminal-fields :done))))
+  (is (= {:request/status :done
+          :request/terminal-at-ms 1234}
+         (model/terminal-fields :done 1234)))
+  (is (= {:request/status :cancelled}
+         (model/terminal-fields :cancelled nil))))
 
 (deftest action-label-test
   (is (= "Claim" (model/action-label :claim)))
@@ -1088,7 +1257,11 @@
   (testing "nil view-state normalizes to a complete usable shape"
     (is (= {:search ""
             :selected-request-id nil
-            :visible-revision (model/latest-revision (ctx))}
+            :visible-revision (model/latest-revision (ctx))
+            :created-order :newest
+            :mine-first? false
+            :unclaimed-first? false
+            :show-terminal? false}
            (model/normalize-view-state (ctx) nil))))
 
   (testing "blank search normalizes to an empty string"
@@ -1138,11 +1311,32 @@
              (:visible-revision
               (model/normalize-view-state
                (ctx)
-               {:visible-revision 1})))))))
+               {:visible-revision 1}))))))
 
-;; -----------------------------------------------------------------------------
-;; Creation
-;; -----------------------------------------------------------------------------
+  (testing "board options normalize from raw form values"
+    (is (= {:search "garden"
+            :selected-request-id "hh-req-1"
+            :visible-revision 2
+            :created-order :oldest
+            :mine-first? true
+            :unclaimed-first? false
+            :show-terminal? true}
+           (model/normalize-view-state
+            (ctx)
+            {"q" " garden "
+             "selected" " hh-req-1 "
+             "visible-revision" "2"
+             "created-order" "oldest"
+             "mine-first" "on"
+             "unclaimed-first" "false"
+             "show-terminal" "true"}))))
+
+  (testing "invalid created-order falls back to default"
+    (is (= :newest
+           (:created-order
+            (model/normalize-view-state
+             (ctx)
+             {:created-order "sideways"}))))))
 
 (deftest create-request-success-test
   (testing "create-request! appends a new open request"
@@ -1271,10 +1465,14 @@
       (is (= latest (:latest-revision toolbar)))
       (is (= latest (:visible-revision toolbar)))
       (is (= latest (get-in toolbar [:view-state :visible-revision])))
+      (is (= :newest (get-in toolbar [:view-state :created-order])))
       (is (= (model/open-request-count (model/all-requests (ctx)))
              (:open-count toolbar)))
       (is (= 0 (:pending-open-count toolbar)))
-      (is (false? (:stale? toolbar)))))
+      (is (false? (:stale? toolbar)))
+      (is (vector? (:created-order-options toolbar)))
+      (is (vector? (:priority-sort-options toolbar)))
+      (is (map? (:terminal-visibility-option toolbar)))))
 
   (testing "toolbar-data reports stale board and pending open requests"
     (let [visible-before (model/latest-revision (ctx))
@@ -1331,9 +1529,15 @@
       (is (= 0 (:pending-open-count board)))
       (is (false? (:stale? board)))
       (is (vector? (:requests board)))
+      (is (nil? (:next-prune-ms board)))
       (is (map? (:view-state board)))
       (is (= latest
-             (get-in board [:view-state :visible-revision]))))))
+             (get-in board [:view-state :visible-revision])))
+      (is (= :newest
+             (get-in board [:view-state :created-order])))
+      (is (vector? (:created-order-options board)))
+      (is (vector? (:priority-sort-options board)))
+      (is (map? (:terminal-visibility-option board))))))
 
 (deftest board-data-new-request-visibility-test
   (testing "new requests are hidden from an older visible revision"
@@ -1464,6 +1668,75 @@
              (get-in board [:view-state :selected-request-id])))
       (is (not (contains? (set (request-ids (:requests board)))
                           (:request/id request)))))))
+
+(deftest board-data-terminal-visibility-test
+  (testing "board-data hides old terminal requests by default and includes them when requested"
+    (let [latest (model/latest-revision (ctx))
+          default-board (model/board-data
+                         (ctx)
+                         {:search ""
+                          :visible-revision latest})
+          history-board (model/board-data
+                         (ctx)
+                         {:search ""
+                          :visible-revision latest
+                          :show-terminal? true})]
+      (is (not-any? model/request-terminal? (:requests default-board)))
+      (is (some model/request-terminal? (:requests history-board)))
+      (is (false? (get-in default-board [:view-state :show-terminal?])))
+      (is (true? (get-in history-board [:view-state :show-terminal?]))))))
+
+(deftest board-data-terminal-fade-test
+  (testing "newly terminal requests remain visible briefly and schedule a prune"
+    (let [created (:request
+                   (model/create-request!
+                    (ctx)
+                    {:user user-owner
+                     :input (valid-input {:title "Fade after done"})}))
+          result (model/mark-request-done!
+                  (ctx)
+                  {:request-id (:request/id created)
+                   :user user-owner})
+          terminal-at (get-in result [:request :request/terminal-at-ms])
+          board (model/board-data
+                 (ctx)
+                 {:view-state {:search "fade"
+                               :visible-revision (:revision result)}
+                  :now-ms (+ terminal-at 1000)})
+          card (first (:requests board))]
+      (is (= :ok (:status result)))
+      (is (= (:request/id created) (:request/id card)))
+      (is (true? (:board/fading-terminal? card)))
+      (is (= (- model/terminal-fade-ms 1000)
+             (:board/terminal-fade-remaining-ms card)))
+      (is (= (- model/terminal-fade-ms 1000)
+             (:next-prune-ms board))))))
+
+(deftest board-option-metadata-test
+  (testing "board option metadata is GUI-safe and reflects active options"
+    (let [view-state {:created-order :oldest
+                      :mine-first? true
+                      :unclaimed-first? false
+                      :show-terminal? true}
+          metadata (model/board-option-metadata view-state)]
+      (is (= [:newest :oldest]
+             (mapv :id (:created-order-options metadata))))
+      (is (= :oldest
+             (:id (first (filter :active?
+                                  (:created-order-options metadata))))))
+      (is (= [{:id :mine-first
+               :checked? true}
+              {:id :unclaimed-first
+               :checked? false}]
+             (mapv #(select-keys % [:id :checked?])
+                   (:priority-sort-options metadata))))
+      (is (= {:id :show-terminal
+              :enabled-key :show-terminal?
+              :checked? true}
+             (select-keys (:terminal-visibility-option metadata)
+                          [:id :enabled-key :checked?])))
+      (is (not-any? :order/key (:created-order-options metadata)))
+      (is (not-any? :priority/key (:priority-sort-options metadata))))))
 
 (deftest board-helper-test
   (testing "board-requests delegates visible filtering"
@@ -1654,6 +1927,7 @@
       (is (= (inc before-revision) (:revision result)))
       (is (= :done (:request/status updated)))
       (is (= (:revision result) (:request/updated-revision updated)))
+      (is (integer? (:request/terminal-at-ms updated)))
       (is (find-event {:kind :request/done
                        :request-id (:request/id open-request)
                        :action :done}))))
@@ -1713,6 +1987,7 @@
       (is (= :ok (:status result)))
       (is (= (inc before-revision) (:revision result)))
       (is (= :cancelled (:request/status updated)))
+      (is (integer? (:request/terminal-at-ms updated)))
       (is (find-event {:kind :request/cancelled
                        :request-id (:request/id open-request)
                        :action :cancel}))))

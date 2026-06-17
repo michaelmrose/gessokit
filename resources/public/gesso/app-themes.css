@@ -1146,6 +1146,7 @@ html.dark [data-background-root] > [data-background-layer="dark"] {
 }
 
 [data-humanhelp-board] [data-humanhelp-request-card] {
+  position: relative;
   overflow: visible !important;
 }
 
@@ -1184,5 +1185,92 @@ html.dark [data-background-root] > [data-background-layer="dark"] {
 
 [data-humanhelp-board] [data-humanhelp-request-summary]:focus-visible {
   outline: none;
+}
+
+/* Terminal/history cards are intentionally quieter than active work. */
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-terminal="true"] {
+  opacity: 0.82;
+}
+
+/* Recently completed/cancelled cards get one lightweight completion ring/glow,
+   then fade down until the model/view delayed prune refresh removes them.
+
+   The glow is intentionally ring-only: no radial-gradient/background fill, so
+   the card face does not become a gradient surface. Keep animation cheap:
+   opacity and transform on the card; opacity only on the ring pseudo-element. */
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-fading-terminal="true"] {
+  pointer-events: none;
+  opacity: 1;
+  animation: humanhelp-terminal-card-fade
+    var(--humanhelp-terminal-fade-ms, 10000ms)
+    linear
+    forwards;
+  will-change: opacity, transform;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-fading-terminal="true"]::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--ring) 80%, transparent);
+  background: transparent;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--ring) 24%, transparent),
+    0 0 18px color-mix(in srgb, var(--ring) 36%, transparent),
+    0 0 34px color-mix(in srgb, var(--ring) 24%, transparent);
+  opacity: 0.95;
+  animation: humanhelp-terminal-ring-fade
+    var(--humanhelp-terminal-fade-ms, 10000ms)
+    ease-out
+    forwards;
+  will-change: opacity;
+}
+
+@keyframes humanhelp-terminal-card-fade {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0.34;
+    transform: translateY(-0.125rem);
+  }
+}
+
+@keyframes humanhelp-terminal-ring-fade {
+  0% {
+    opacity: 0.95;
+  }
+
+  10% {
+    opacity: 0.85;
+  }
+
+  35% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-fading-terminal="true"] {
+    animation: none;
+    opacity: 0.55;
+    transform: none;
+    will-change: auto;
+  }
+
+  [data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-fading-terminal="true"]::after {
+    animation: none;
+    opacity: 0.22;
+    will-change: auto;
+  }
 }
 

@@ -72,6 +72,16 @@
    ctx
    (render-view-state ctx)))
 
+(defn- render-board-env
+  "Return the model board env for the current fragment render.
+
+   Board options such as :mine-first? need the current user, while all
+   options need the normalized view-state captured from the fragment request
+   or stream connection."
+  [ctx]
+  {:user (render-user ctx)
+   :view-state (normalized-render-view-state ctx)})
+
 ;; -----------------------------------------------------------------------------
 ;; Lazy view boundary
 ;; -----------------------------------------------------------------------------
@@ -124,21 +134,23 @@
 
 (defn request-toolbar-query
   [ctx id]
-  (let [view-state (normalized-render-view-state ctx)]
+  (let [{:keys [user view-state] :as board-env} (render-board-env ctx)]
     (merge
-     (model/toolbar-data ctx view-state)
+     (model/toolbar-data ctx board-env)
      {:ctx ctx
       :store/id id
-      :user (render-user ctx)})))
+      :user user
+      :view-state view-state})))
 
 (defn request-list-query
   [ctx id]
-  (let [view-state (normalized-render-view-state ctx)]
+  (let [{:keys [user view-state] :as board-env} (render-board-env ctx)]
     (merge
-     (model/board-data ctx view-state)
+     (model/board-data ctx board-env)
      {:ctx ctx
       :store/id id
-      :user (render-user ctx)})))
+      :user user
+      :view-state view-state})))
 
 ;; -----------------------------------------------------------------------------
 ;; Fragment renders

@@ -36,6 +36,15 @@
 (def create-request-dialog-body-id
   "humanhelp-create-request-dialog-body")
 
+(def board-options-dialog-id
+  "humanhelp-board-options-dialog")
+
+(def board-options-dialog-body-id
+  "humanhelp-board-options-dialog-body")
+
+(def search-input-dom-id
+  "humanhelp-search")
+
 (def board-state-form-id
   "humanhelp-board-state")
 
@@ -47,12 +56,28 @@
   []
   (str "#" board-state-form-id))
 
-(defn selected-state-input-selector
-  []
+(defn board-state-input-selector
+  [name]
   (str (board-state-selector)
        " input[name="
-       routes/selected-param
+       name
        "]"))
+
+(defn selected-state-input-selector
+  []
+  (board-state-input-selector routes/selected-param))
+
+(defn board-options-preserved-state-selector
+  "Return the live DOM fields that board-options submits but does not edit.
+
+   Do not include the whole board-state form here: it contains hidden board-option
+   inputs, and the options form has visible controls for those same params. The
+   options form should include only current search, selected request, and visible
+   revision from the stable board-state/search form."
+  []
+  (str "#" search-input-dom-id
+       ", " (board-state-input-selector routes/selected-param)
+       ", " (board-state-input-selector routes/visible-revision-param)))
 
 ;; -----------------------------------------------------------------------------
 ;; Small helpers
@@ -91,11 +116,39 @@
 (defn hidden-input-present
   "Render a hidden input even when value is blank.
 
-   Useful for inputs that client-side behavior writes into by selector."
+   Useful for inputs that client-side behavior writes into by selector or for
+   form state where an intentionally blank value should still be submitted."
   [name value]
   [:input {:type "hidden"
            :name name
            :value (or value "")}])
+
+(defn boolean-param-value
+  [x]
+  (if x "true" "false"))
+
+(defn created-order-param-value
+  [view-state]
+  (name (or (:created-order view-state)
+            model/default-created-order
+            :newest)))
+
+(defn board-state-option-hidden-inputs
+  "Render hidden inputs for board options when a form is only preserving state.
+
+   These forms are not visibly editing board options, so checkbox state must be
+   explicit. Otherwise unchecked checkboxes would be indistinguishable from
+   missing state after a later request."
+  [{:keys [mine-first? unclaimed-first? show-terminal?] :as view-state}]
+  [:div {:style {:display "contents"}}
+   (hidden-input routes/created-order-param
+                 (created-order-param-value view-state))
+   (hidden-input routes/mine-first-param
+                 (boolean-param-value mine-first?))
+   (hidden-input routes/unclaimed-first-param
+                 (boolean-param-value unclaimed-first?))
+   (hidden-input routes/show-terminal-param
+                 (boolean-param-value show-terminal?))])
 
 (defn view-state-hidden-inputs
   "Render full view-state hidden inputs.
@@ -103,11 +156,12 @@
    Use this for forms that do not have their own visible search input.
    Do not use this inside search-control, because that form already has the
    visible search input named q."
-  [{:keys [search selected-request-id visible-revision]}]
+  [{:keys [search selected-request-id visible-revision] :as view-state}]
   [:div {:style {:display "contents"}}
    (hidden-input routes/search-param search)
    (hidden-input routes/selected-param selected-request-id)
-   (hidden-input routes/visible-revision-param visible-revision)])
+   (hidden-input routes/visible-revision-param visible-revision)
+   (board-state-option-hidden-inputs view-state)])
 
 (defn board-state-hidden-inputs
   "Render board-state hidden inputs for the search/board-state form.
@@ -118,10 +172,12 @@
 
    The selected input is always rendered, even when blank, because the generic
    Gesso accordion state-sync script needs a stable input to write into."
-  [{:keys [selected-request-id visible-revision]}]
+  [{:keys [selected-request-id visible-revision] :as view-state}]
   [:div {:style {:display "contents"}}
    (hidden-input-present routes/selected-param selected-request-id)
-   (hidden-input routes/visible-revision-param visible-revision)])
+   (hidden-input routes/visible-revision-param visible-revision)
+   (board-state-option-hidden-inputs view-state)])
+
 
 (defn oob-response
   [& nodes]
@@ -262,6 +318,128 @@
     :open? open?}))
 
 ;; -----------------------------------------------------------------------------
+;; Board options dialog
+;; -----------------------------------------------------------------------------
+
+(defn option-param-name
+  [enabled-key]
+  (case enabled-key
+    :mine-first? routes/mine-first-param
+    :unclaimed-first? routes/unclaimed-first-param
+    :show-terminal? routes/show-terminal-param
+    (name enabled-key)))
+
+(defn board-options-button
+  []
+  (g/dialog-trigger
+   {:class "btn-icon-secondary"
+    :attrs {:aria-label "Board options"
+            :title "Board options"
+            :data-humanhelp-board-options-trigger true}}
+   (g/icon "settings" {:size :sm})))
+
+(defn created-order-select
+  [{:keys [created-order-options]}]
+  (let [active-id (or (some (fn [{:keys [id active?]}]
+                              (when active? id))
+                            created-order-options)
+                      model/default-created-order)]
+    (g/field
+     {:for "humanhelp-created-order"
+      :label-text "Sort order"
+      :class "content-stack-theme gap-1"
+      :control
+      (g/select
+       {:id "humanhelp-created-order"
+        :name routes/created-order-param
+        :value (name active-id)
+        :options (mapv (fn [{:keys [id label]}]
+                         {:value (name id)
+                          :label label})
+                       created-order-options)
+        :class "w-full"
+        :attrs {:data-humanhelp-created-order-select true}})})))
+
+(defn checkbox-option
+  [{:keys [id label enabled-key checked?]}]
+  (let [input-id (str "humanhelp-board-option-" (name id))]
+    [:label {:for input-id
+             :class "flex items-center gap-inline rounded-md py-1"
+             :data-humanhelp-board-option true
+             :data-humanhelp-board-option-id (name id)}
+     (g/checkbox
+      {:id input-id
+       :name (option-param-name enabled-key)
+       :value "true"
+       :checked (boolean checked?)})
+     (g/text
+      {:as :span
+       :variant :small
+       :class "weight-medium-theme"
+       :text label})]))
+
+(defn board-options-form
+  [ctx {:keys [view-state
+               created-order-options
+               priority-sort-options
+               terminal-visibility-option]}]
+  (let [metadata (model/board-option-metadata (or view-state {}))
+        created-order-options (or created-order-options
+                                  (:created-order-options metadata))
+        priority-sort-options (or priority-sort-options
+                                  (:priority-sort-options metadata))
+        terminal-visibility-option (or terminal-visibility-option
+                                       (:terminal-visibility-option metadata))]
+    (g/form
+     ctx
+     {:post (routes/apply-board-options-url)
+      :swap "none"
+      :class "form-theme content-stack-theme gap-form"
+      :attrs {:data-humanhelp-board-options-form true
+              :hx-include (board-options-preserved-state-selector)}}
+
+     (created-order-select
+      {:created-order-options created-order-options})
+
+     (into
+      [:div {:class "content-stack-theme gap-field"
+             :data-humanhelp-priority-options true}]
+      (map checkbox-option)
+      priority-sort-options)
+
+     [:div {:class "content-stack-theme gap-field"
+            :data-humanhelp-visibility-options true}
+      (checkbox-option terminal-visibility-option)]
+
+     (g/group
+      {:align :end}
+      (g/dialog-close
+       {:text "Cancel"})
+      (g/button
+       {:variant :primary
+        :text "Done"
+        :attrs {:type "submit"}})))))
+
+(defn board-options-dialog-body
+  [ctx opts]
+  [:div {:id board-options-dialog-body-id
+        :class "pt-4"}
+   (board-options-form ctx opts)])
+
+(defn board-options-dialog
+  [ctx {:keys [open?] :as opts}]
+  (g/dialog
+   {:open? open?
+    :attrs {:id board-options-dialog-id}}
+   (board-options-button)
+   (g/dialog-overlay
+    {:open? open?})
+   (g/dialog-content
+    {:open? open?
+     :title "Board options"
+     :body [(board-options-dialog-body ctx opts)]})))
+
+;; -----------------------------------------------------------------------------
 ;; Request toolbar
 ;; -----------------------------------------------------------------------------
 
@@ -306,7 +484,10 @@
            open-count
            pending-open-count
            stale?
-           latest-revision]}]
+           latest-revision
+           created-order-options
+           priority-sort-options
+           terminal-visibility-option]}]
   (let [view-state (or view-state {})
         stale?     (boolean stale?)]
     [:div {:id request-toolbar-dom-id
@@ -328,6 +509,13 @@
                {:user user
                 :values {}
                 :errors {}
+                :open? false})
+              (board-options-dialog
+               ctx
+               {:view-state view-state
+                :created-order-options created-order-options
+                :priority-sort-options priority-sort-options
+                :terminal-visibility-option terminal-visibility-option
                 :open? false}))]})
 
      (when stale?
@@ -347,17 +535,18 @@
       {:get (routes/search-requests-url)
        :target (str "#" request-list-dom-id)
        :swap "outerHTML"
-       :trigger "keyup changed delay:250ms from:#humanhelp-search, search from:#humanhelp-search"
+       :trigger (str "keyup changed delay:250ms from:#" search-input-dom-id
+                     ", search from:#" search-input-dom-id)
        :class "content-stack-theme"
        :attrs {:id board-state-form-id}}
       (board-state-hidden-inputs view-state)
       (g/field
-       {:for "humanhelp-search"
+       {:for search-input-dom-id
         :label-text "Search requests"
         :control
         (g/input
          {:type "search"
-          :id "humanhelp-search"
+          :id search-input-dom-id
           :name routes/search-param
           :value (or (:search view-state) "")
           :placeholder "Search by person, request, area, or status"})})))))
@@ -398,12 +587,24 @@
         :view-state view-state}))
     requests)))
 
+(defn request-list-prune-attrs
+  [next-prune-ms]
+  (when (and (integer? next-prune-ms)
+             (pos? next-prune-ms))
+    {:hx-get (routes/request-list-fragment-url)
+     :hx-trigger (str "load delay:" next-prune-ms "ms")
+     :hx-swap "outerHTML"
+     :hx-include (board-state-selector)
+     :data-humanhelp-next-prune-ms next-prune-ms}))
+
 (defn request-list-fragment
-  [{:keys [ctx user view-state requests latest-revision]}]
-  [:div {:id request-list-dom-id
-         :data-humanhelp-fragment "request-list"
-         :data-latest-revision latest-revision
-         :class "content-stack-theme"}
+  [{:keys [ctx user view-state requests latest-revision next-prune-ms]}]
+  [:div (merge
+         {:id request-list-dom-id
+          :data-humanhelp-fragment "request-list"
+          :data-latest-revision latest-revision
+          :class "content-stack-theme"}
+         (request-list-prune-attrs next-prune-ms))
    (if (seq requests)
      (request-accordion
       {:ctx ctx
@@ -475,8 +676,8 @@
 (defn replace-board-state-oob
   "Render an OOB replacement for the stable board-state/search form.
 
-   The app should use this whenever a response changes selected request or
-   visible revision outside the search form itself."
+   The app should use this whenever a response changes selected request,
+   visible revision, or board options outside the search form itself."
   ([view-state]
    (replace-board-state-oob nil view-state))
   ([ctx view-state]
