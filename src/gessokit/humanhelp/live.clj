@@ -125,17 +125,31 @@
 (def request-list-client-continuity
   "Client-only interaction continuity for the request list.
 
-   Selection/filter state remains server-relevant board state carried through
-   #humanhelp-board-state and hx-include. This continuity config is only for
-   browser-local context that should survive list replacement, especially scroll
-   anchoring and focus/caret restoration.
+   Search/filter/revision state remains server-relevant board state carried
+   through #humanhelp-board-state and hx-include.
+
+   This continuity config is only for browser-local context that should survive
+   list replacement:
+
+   - scroll anchoring
+   - focus/caret restoration
+   - native <details open> state for request cards
+
+   The details-open box deliberately restores DOM-local open state, not
+   server-visible selection state. It keys each card by data-accordion-value,
+   which is the request id rendered on the <details> node by the accordion
+   component.
 
    The scroll selector should match stable request-card elements in the rendered
    list. If the request list later moves into its own scrollable viewport, add a
    :container-selector here and mark that viewport in views."
   (continuity/preserve
    {:scroll {:selector "[data-humanhelp-request-card]"}
-    :focus true}))
+    :focus true
+    :boxes [(continuity/details-open
+             {:selector "details[data-humanhelp-request-card][data-accordion-value]"
+              :key-attr "data-accordion-value"
+              :single? true})]}))
 
 ;; -----------------------------------------------------------------------------
 ;; Live scope authorization
@@ -285,14 +299,13 @@
 (defn fragment-options
   "Return model-backed fragment panel options.
 
-   The fragment and stream URLs intentionally omit q/selected/visible-revision.
-   Browser-local board state is carried by #humanhelp-board-state and included
-   on live fragment fetches through :root-attrs. This keeps the stable live
-   wrapper generic while preserving the current client-side view state.
+   The fragment and stream URLs intentionally omit q/visible-revision. Browser
+   board state is carried by #humanhelp-board-state and included on live fragment
+   fetches through :root-attrs. This keeps the stable live wrapper generic while
+   preserving the current client-side view state.
 
-   Request-list scroll/focus continuity is client-only and is therefore declared
-   as :client-continuity on the request-list panel. Selection remains ordinary
-   board state, not a continuity concern."
+   Request-list scroll/focus/details-open continuity is client-only and is
+   therefore declared as :client-continuity on the request-list panel."
   ([fragment-name]
    (fragment-options fragment-name nil))
   ([fragment-name _view-state]
