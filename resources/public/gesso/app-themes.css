@@ -1296,6 +1296,40 @@ html.dark [data-background-root] > [data-background-layer="dark"] {
   filter: brightness(0.9) saturate(0.88) !important;
 }
 
+/* Optimistic request action feedback.
+
+   Three phases:
+
+   1. Native press:
+      CSS :active on the real action button. This is instant and does not
+      depend on JS or HTMX timing.
+
+   2. JS press:
+      gesso-live marks the source form/button while the request starts. This is
+      a short-lived "the click landed" affordance.
+
+   3. Optimistic card:
+      The card is rendered as the projected future state. It should mostly look
+      normal. Controls are visible and normal-looking, but disabled. A small
+      "Waiting to confirm…" line in the markup carries the caveat. */
+
+[data-humanhelp-board] [data-humanhelp-request-action-form] button {
+  transition:
+    transform 80ms ease-out,
+    opacity 80ms ease-out,
+    filter 80ms ease-out,
+    box-shadow 80ms ease-out;
+  will-change: transform;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-action-form] button:active {
+  transform: translateY(2px) scale(0.965) !important;
+  box-shadow:
+    inset 0 3px 8px color-mix(in srgb, black 42%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent) !important;
+  filter: brightness(0.9) saturate(0.88) !important;
+}
+
 /* JS press phase. Current temporary implementation stores optimistic attrs on
    the form, so style the button inside that form as well as any trigger button
    directly marked by JS. */
@@ -1303,12 +1337,12 @@ html.dark [data-background-root] > [data-background-layer="dark"] {
 [data-humanhelp-board] button[data-gesso-optimistic-trigger="true"],
 [data-humanhelp-board] [role="button"][data-gesso-optimistic-trigger="true"] {
   cursor: progress !important;
-  opacity: 0.86 !important;
-  transform: translateY(2px) scale(0.965) !important;
+  opacity: 0.9 !important;
+  transform: translateY(2px) scale(0.97) !important;
   box-shadow:
-    inset 0 3px 8px color-mix(in srgb, black 38%, transparent),
-    0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent) !important;
-  filter: brightness(0.92) saturate(0.88) !important;
+    inset 0 3px 8px color-mix(in srgb, black 36%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--ring) 38%, transparent) !important;
+  filter: brightness(0.94) saturate(0.9) !important;
 }
 
 [data-humanhelp-board] form[data-gesso-optimistic-pressed="true"] button::after,
@@ -1326,32 +1360,42 @@ html.dark [data-background-root] > [data-background-layer="dark"] {
   animation: humanhelp-action-spin 650ms linear infinite;
 }
 
+/* Pressed card shell. Keep this very subtle; the button is the main affordance. */
 [data-humanhelp-board] [data-humanhelp-request-card][data-gesso-optimistic-pressed="true"] {
   cursor: progress;
-  transform: translateY(1px);
-  outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
-  outline-offset: 2px;
 }
 
-[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-pending="true"] {
-  cursor: progress;
+/* Optimistic/pending card phase. The projected card should read as the real
+   future state, not as a fake disabled placeholder. */
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-pending="true"],
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] {
+  cursor: default;
 }
 
 [data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] {
-  border-color: color-mix(in srgb, var(--ring) 70%, var(--border) 30%) !important;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--ring) 44%, transparent),
-    0 0 22px color-mix(in srgb, var(--ring) 20%, transparent),
-    var(--shadow-sm) !important;
+  border-color: color-mix(in srgb, var(--border) 80%, transparent) !important;
+  box-shadow: var(--shadow-sm) !important;
 }
 
 [data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-summary] {
-  cursor: progress;
+  cursor: pointer;
 }
 
-[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-actions] {
-  opacity: 0.65;
-  pointer-events: none;
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-actions],
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-pending="true"] [data-humanhelp-request-actions] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Keep projected controls visually normal even though they are disabled to
+   prevent nonsense second actions while the server confirms. */
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-actions] button:disabled,
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-pending="true"] [data-humanhelp-request-actions] button:disabled {
+  opacity: 1 !important;
+  filter: none !important;
+  cursor: default !important;
+  transform: none !important;
+  box-shadow: inherit;
 }
 
 @keyframes humanhelp-action-spin {

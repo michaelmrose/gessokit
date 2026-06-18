@@ -111,24 +111,29 @@
 (defn- optimistic-request
   [request user action]
   (let [pending-label (action-pending-label action)
+        user-id       (:user/id user)
         user-email    (:user/email user)]
     (case action
       :claim
       (assoc (pending-request request action pending-label)
              :request/status :claimed
+             :request/claimed-by user-id
              :request/claimed-by-email user-email
              :ui/claimed-by-me? true)
 
       :take-over
       (assoc (pending-request request action pending-label)
              :request/status :claimed
+             :request/claimed-by user-id
              :request/claimed-by-email user-email
              :ui/claimed-by-me? true)
 
       :unclaim
       (assoc (pending-request request action pending-label)
              :request/status :open
-             :request/claimed-by-email nil)
+             :request/claimed-by nil
+             :request/claimed-by-email nil
+             :ui/claimed-by-me? false)
 
       :done
       (pending-request request action pending-label)
@@ -150,6 +155,7 @@
                view-state
                board-state-selector
                optimistic-template-id
+               disabled?
                attrs]}]
   [:form
    (attr/action-form-attrs
@@ -166,7 +172,10 @@
     {:variant (or variant :default)
      :size (or size :sm)
      :text text
-     :attrs {:type "submit"}})])
+     :attrs (cond-> {:type "submit"}
+              disabled?
+              (assoc :disabled true
+                     :aria-disabled "true"))})])
 
 (defn action-button
   [ctx request action view-state board-state-selector]
@@ -184,8 +193,13 @@
     :view-state view-state
     :board-state-selector board-state-selector
     :optimistic-template-id (optimistic-template-id request action)
+    :disabled? (:ui/disable-actions? request)
     :attrs {:data-humanhelp-request-action (name action)
             :data-gesso-optimistic-label (action-pending-label action)}}))
+
+;; -----------------------------------------------------------------------------
+;; Card Content
+;; -----------------------------------------------------------------------------
 
 (defn request-meta
   [request]
@@ -208,21 +222,21 @@
      :text (str "waiting " (model/waiting-label request))})])
 
 (defn- pending-note
-  []
-  (g/muted-text
-   {:as :p
-    :class "text-sm-theme leading-body"
-    :text "Waiting for the server to confirm this change…"}))
+  [request]
+  (when (:ui/pending? request)
+    (g/muted-text
+     {:as :p
+      :class "text-xs-theme leading-body"
+      :text "confirming…"})))
 
 (defn request-card-actions
   [ctx request user view-state board-state-selector]
-  (if (:ui/disable-actions? request)
-    (pending-note)
-    (let [actions (model/available-actions request user)]
-      (when (seq actions)
-        (into
-         [:div (attr/actions-attrs)]
-         (map #(action-button ctx request % view-state board-state-selector) actions))))))
+  (let [actions (model/available-actions request user)]
+    (when (seq actions)
+      (into
+       [:div (attr/actions-attrs)]
+       (map #(action-button ctx request % view-state board-state-selector))
+       actions))))
 
 (defn- claimed-by-label
   [request user]
@@ -276,16 +290,27 @@
        :variant :small
        :class "leading-body"
        :text (:request/details request)}))
-   (request-card-actions ctx request user view-state board-state-selector)))
+   (request-card-actions ctx request user view-state board-state-selector)
+   (pending-note request)))
+
+;; -----------------------------------------------------------------------------
+;; Card Shell
+;; -----------------------------------------------------------------------------
 
 (defn- request-item-attrs
   [request open?]
   (merge
    (attr/item-attrs request open?)
    (cond-> {}
-     (:ui/pending? request) (assoc :data-humanhelp-request-pending "true")
-     (:ui/optimistic? request) (assoc :data-humanhelp-request-optimistic "true")
-     (:ui/pending-action request) (assoc :data-humanhelp-request-pending-action (name (:ui/pending-action request))))))
+     (:ui/pending? request)
+     (assoc :data-humanhelp-request-pending "true")
+
+     (:ui/optimistic? request)
+     (assoc :data-humanhelp-request-optimistic "true")
+
+     (:ui/pending-action request)
+     (assoc :data-humanhelp-request-pending-action
+            (name (:ui/pending-action request))))))
 
 (defn- base-request-card
   [ctx {:keys [request user view-state board-state-selector open?]}]
@@ -297,6 +322,10 @@
       :attrs (request-item-attrs request open?)}
      (request-summary request user open?)
      (request-content ctx request user view-state board-state-selector))))
+
+;; -----------------------------------------------------------------------------
+;; Optimistic Templates
+;; -----------------------------------------------------------------------------
 
 (defn- optimistic-template
   [ctx {:keys [request user view-state board-state-selector action]}]
@@ -324,6 +353,10 @@
              :view-state view-state
              :board-state-selector board-state-selector
              :action action})))))))
+
+;; -----------------------------------------------------------------------------
+;; Public Card
+;; -----------------------------------------------------------------------------
 
 (defn request-card
   "Render a model-backed request accordion row with embedded optimistic template hooks."
