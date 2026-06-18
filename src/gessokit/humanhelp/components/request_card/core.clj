@@ -183,9 +183,9 @@
                :default)
     :view-state view-state
     :board-state-selector board-state-selector
+    :optimistic-template-id (optimistic-template-id request action)
     :attrs {:data-humanhelp-request-action (name action)
-            :data-gesso-optimistic-label (action-pending-label action)
-            :data-gesso-optimistic-target "closest [data-humanhelp-request-card]"}}))
+            :data-gesso-optimistic-label (action-pending-label action)}}))
 
 (defn request-meta
   [request]
@@ -227,6 +227,9 @@
 (defn- claimed-by-label
   [request user]
   (cond
+    (:ui/claimed-by-me? request)
+    "you"
+
     (= (:request/claimed-by request) (:user/id user))
     "you"
 
