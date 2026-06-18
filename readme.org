@@ -4,17 +4,11 @@
 
 Gessokit is the starter project for Gesso.
 
-It contains:
+It contains a deps-new template for creating new Gesso apps, plus a working example app that demonstrates the intended project shape. The included Human Help app shows routing, HTMX forms, live fragments, SSE invalidation, toasts, theme building, tests, and Gesso Live continuity.
 
-* a deps-new template for creating new Gesso apps
-* a working example app
-* theme build wiring
-* development tasks
-* tests showing the intended project shape
+* Usage
 
-The included Human Help app demonstrates routing, HTMX forms, live fragments, SSE invalidation, toasts, and Gesso Live continuity.
-
-* Create an app
+Create a new app from the local template:
 
 #+begin_src sh
 git clone https://github.com/michaelmrose/gessokit
@@ -33,13 +27,13 @@ For a dotted primary namespace:
 bb new ../humanhelp net.humanhelp
 #+end_src
 
-This creates source paths like:
+That creates source paths like:
 
 #+begin_src text
 src/net/humanhelp/...
 #+end_src
 
-* Develop Gessokit itself
+* Development
 
 Run the dev server:
 
@@ -59,32 +53,21 @@ Run tests:
 clojure -M:test
 #+end_src
 
-* Template workflow
-
 Regenerate the local deps-new template:
 
 #+begin_src sh
 bb to-template
 #+end_src
 
-Create a project from that local template:
+Create a scratch project from the regenerated template:
 
 #+begin_src sh
 bb new ../scratch scratch
 #+end_src
 
-The generated project should use the released Gesso Git dependency, not a sibling checkout.
+Generated projects should use the released Gesso Git dependency, not a sibling checkout.
 
-* Local Gesso development
-
-When developing Gesso and Gessokit together, clone them side by side:
-
-#+begin_src sh
-git clone https://github.com/michaelmrose/gesso
-git clone https://github.com/michaelmrose/gessokit
-#+end_src
-
-During framework work, Gessokit can temporarily depend on the local checkout:
+When developing Gesso and Gessokit together, clone them side by side and temporarily use a local root dependency:
 
 #+begin_src clojure
 michaelmrose/gesso {:local/root "../gesso"}
@@ -104,14 +87,16 @@ michaelmrose/gesso
 #+begin_src sh
 bb themes
 clojure -M:test
+
 bb to-template
 rm -rf ../scratch-gessokit
 bb new ../scratch-gessokit scratch.gessokit
+
 cd ../scratch-gessokit
 clojure -M:test
 #+end_src
 
-Then tag Gessokit:
+Tag the release:
 
 #+begin_src sh
 git tag -a v1.0.0 -m "Gessokit 1.0.0"
