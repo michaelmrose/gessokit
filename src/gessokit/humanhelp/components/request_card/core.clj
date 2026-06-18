@@ -225,8 +225,19 @@
   [request]
   (when (:ui/pending? request)
     (g/muted-text
-     {:as :p
-      :class "text-xs-theme leading-body"
+     {:as :span
+      :class "text-xs-theme leading-body weight-medium-theme"
+      :attrs {:data-humanhelp-request-pending-note true
+              :aria-live "polite"
+              :style {:position "absolute"
+                      :inset-block-start "var(--space-3)"
+                      :inset-inline-end "calc(var(--space-5) + var(--icon-size-lg))"
+                      :z-index 2
+                      :pointer-events "none"
+                      :padding "0.125rem 0.4rem"
+                      :border-radius "var(--radius-sm)"
+                      :background "color-mix(in srgb, var(--card) 88%, transparent)"
+                      :box-shadow "var(--shadow-xs)"}}
       :text "confirming…"})))
 
 (defn request-card-actions
@@ -290,8 +301,7 @@
        :variant :small
        :class "leading-body"
        :text (:request/details request)}))
-   (request-card-actions ctx request user view-state board-state-selector)
-   (pending-note request)))
+   (request-card-actions ctx request user view-state board-state-selector)))
 
 ;; -----------------------------------------------------------------------------
 ;; Card Shell
@@ -321,6 +331,7 @@
       :class (attr/item-class request open?)
       :attrs (request-item-attrs request open?)}
      (request-summary request user open?)
+     (pending-note request)
      (request-content ctx request user view-state board-state-selector))))
 
 ;; -----------------------------------------------------------------------------
