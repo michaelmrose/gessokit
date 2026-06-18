@@ -5,6 +5,10 @@
    [gessokit.humanhelp.model :as model]
    [gessokit.humanhelp.routes :as routes]))
 
+;; -----------------------------------------------------------------------------
+;; Status Pill Rendering
+;; -----------------------------------------------------------------------------
+
 (defn status-label
   [request]
   (or (:ui/pending-label request)
@@ -27,6 +31,10 @@
    {:status (status-pill-status request)
     :text (status-label request)
     :dot? true}))
+
+;; -----------------------------------------------------------------------------
+;; Hidden Parameter Sync
+;; -----------------------------------------------------------------------------
 
 (defn hidden-input
   [name value]
@@ -52,10 +60,6 @@
    Action forms do not have their own visible search or board-option controls,
    so they preserve the current normalized board state.
 
-   If a caller supplies :board-state-selector to request-card, the action form
-   also hx-includes the live board-state form. These hidden fields remain useful
-   as a safe fallback for callers that do not yet pass that selector.
-
    Open/selected request-card state is intentionally not preserved here.
    Preserving local accordion open state across fragment replacement belongs to
    Gesso Live continuity."
@@ -72,6 +76,10 @@
    (true-input routes/mine-first-param mine-first?)
    (true-input routes/unclaimed-first-param unclaimed-first?)
    (true-input routes/show-terminal-param show-terminal?)])
+
+;; -----------------------------------------------------------------------------
+;; Optimistic State Generation
+;; -----------------------------------------------------------------------------
 
 (defn- action-pending-label
   [action]
@@ -130,6 +138,10 @@
 
       (pending-request request action pending-label))))
 
+;; -----------------------------------------------------------------------------
+;; Action Form Composition
+;; -----------------------------------------------------------------------------
+
 (defn form-action
   [ctx {:keys [to
                text
@@ -171,9 +183,9 @@
                :default)
     :view-state view-state
     :board-state-selector board-state-selector
-    :optimistic-template-id (optimistic-template-id request action)
     :attrs {:data-humanhelp-request-action (name action)
-            :data-gesso-optimistic-label (action-pending-label action)}}))
+            :data-gesso-optimistic-label (action-pending-label action)
+            :data-gesso-optimistic-target "closest [data-humanhelp-request-card]"}}))
 
 (defn request-meta
   [request]
@@ -210,13 +222,12 @@
       (when (seq actions)
         (into
          [:div (attr/actions-attrs)]
-         (map #(action-button ctx request % view-state board-state-selector))
-         actions)))))
+         (map #(action-button ctx request % view-state board-state-selector) actions))))))
 
 (defn- claimed-by-label
-  [request]
+  [request user]
   (cond
-    (:ui/claimed-by-me? request)
+    (= (:request/claimed-by request) (:user/id user))
     "you"
 
     (:request/claimed-by-email request)
@@ -226,7 +237,7 @@
     nil))
 
 (defn request-summary
-  [request open?]
+  [request user open?]
   [:summary (attr/summary-attrs)
    [:div (attr/header-stack-attrs)
     [:h3 (attr/title-attrs)
@@ -241,7 +252,7 @@
        :class "weight-medium-theme"
        :text (:request/customer-name request)})
 
-     (when-let [claimed-by (claimed-by-label request)]
+     (when-let [claimed-by (claimed-by-label request user)]
        (g/muted-text
         {:as :span
          :class "text-xs-theme leading-body"
@@ -269,29 +280,19 @@
   (merge
    (attr/item-attrs request open?)
    (cond-> {}
-     (:ui/pending? request)
-     (assoc :data-humanhelp-request-pending "true")
-
-     (:ui/optimistic? request)
-     (assoc :data-humanhelp-request-optimistic "true")
-
-     (:ui/pending-action request)
-     (assoc :data-humanhelp-request-pending-action
-            (name (:ui/pending-action request))))))
+     (:ui/pending? request) (assoc :data-humanhelp-request-pending "true")
+     (:ui/optimistic? request) (assoc :data-humanhelp-request-optimistic "true")
+     (:ui/pending-action request) (assoc :data-humanhelp-request-pending-action (name (:ui/pending-action request))))))
 
 (defn- base-request-card
-  [ctx {:keys [request
-               user
-               view-state
-               board-state-selector
-               open?]}]
+  [ctx {:keys [request user view-state board-state-selector open?]}]
   (let [view-state (or view-state {})]
     (g/accordion-item
      {:value (:request/id request)
       :open? open?
       :class (attr/item-class request open?)
       :attrs (request-item-attrs request open?)}
-     (request-summary request open?)
+     (request-summary request user open?)
      (request-content ctx request user view-state board-state-selector))))
 
 (defn- optimistic-template
@@ -322,6 +323,7 @@
              :action action})))))))
 
 (defn request-card
+  "Render a model-backed request accordion row with embedded optimistic template hooks."
   [ctx {:keys [request
                user
                view-state
