@@ -111,7 +111,7 @@
             (>= i n) false
             (zero? (aget buf i)) true
             :else (recur (inc i))))))
-    (catch Throwable e
+    (catch Throwable _e
       false)))
 
 (defn binary-file?
@@ -212,7 +212,7 @@
   [p]
   (try
     (slurp (io-str p))
-    (catch Throwable e
+    (catch Throwable _e
       nil)))
 
 (defn write-text-file!
@@ -224,6 +224,21 @@
   [src dst]
   (fs/create-dirs (fs/parent dst))
   (fs/copy src dst {:replace-existing true}))
+
+(defn create-template-dir!
+  "Preserve a source directory in the template root.
+
+   File copying already creates parent directories as needed, but empty source
+   directories would otherwise disappear because the template generator primarily
+   walks regular files. Preserve all non-excluded directories explicitly so
+   project shape remains part of the template contract."
+  [{:keys [source-root root-dir source-primary-ns]}
+   p]
+  (let [rel (rel-str source-root p)]
+    (when-not (contains? #{"" "."} rel)
+      (fs/create-dirs
+       (fs/path root-dir
+                (parameterize-path rel source-primary-ns))))))
 
 (defn copy-template-file!
   [{:keys [source-root root-dir rename-dir raw-dir raw-rename-dir source-primary-ns]}
@@ -413,6 +428,18 @@
       (fs/create-dirs rename-dir)
       (fs/create-dirs raw-dir)
       (fs/create-dirs raw-rename-dir)
+
+      ;; Preserve directory-only project structure before copying files. This is
+      ;; intentionally broad: all non-excluded source directories are part of the
+      ;; template shape, including currently-empty component extension points.
+      (doseq [p (fs/glob source-root "**")
+              :when (and (fs/directory? p)
+                         (not (excluded? source-root p)))]
+        (create-template-dir!
+         {:source-root       source-root
+          :root-dir          root-dir
+          :source-primary-ns source-primary-ns}
+         p))
 
       (let [ctx {:source-root       source-root
                  :root-dir          root-dir
