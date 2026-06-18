@@ -14,7 +14,7 @@
 (def default-theme
   {:color-theme "cosmicnight"
    :density "default"
-   :typography "ui"
+   :typography "sans-headings"
    :shape "default"})
 
 (def default-mode
@@ -82,20 +82,15 @@
    When app themes are generated into public/gesso/app-themes.css, they appear
    in the UI without hand-editing Clojure."
   []
-  (let [css-blobs (map slurp (theme-css-resources))]
-    (reduce
-     (fn [m {:keys [axis attr]}]
-       (let [discovered (->> css-blobs
-                             (mapcat #(options-from-css % attr))
-                             distinct
-                             sort
-                             vec)
-             fallback   (some-> (get default-theme axis) vector)]
-         (assoc m axis (or (not-empty discovered)
-                           fallback
-                           []))))
-     {}
-     axis-specs)))
+  (let [discovered (->> css-blobs
+                        (mapcat #(options-from-css % attr)))
+        fallback   (some-> (get default-theme axis) vector)]
+    (assoc m axis
+           (->> (concat discovered fallback)
+                distinct
+                sort
+                vec)))
+  )
 
 (defn theme-state
   "Return the server-rendered theme state for ctx.
