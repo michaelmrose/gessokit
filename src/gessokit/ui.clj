@@ -80,17 +80,28 @@
   "Discover available theme axis values from bundled/app-generated CSS.
 
    When app themes are generated into public/gesso/app-themes.css, they appear
-   in the UI without hand-editing Clojure."
+   in the UI without hand-editing Clojure.
+
+   The configured default for each axis is always included first so changing
+   default-theme affects the initial picker state."
   []
-  (let [discovered (->> css-blobs
-                        (mapcat #(options-from-css % attr)))
-        fallback   (some-> (get default-theme axis) vector)]
-    (assoc m axis
-           (->> (concat discovered fallback)
-                distinct
-                sort
-                vec)))
-  )
+  (let [css-blobs (map slurp (theme-css-resources))]
+    (reduce
+     (fn [m {:keys [axis attr]}]
+       (let [default-opt (get default-theme axis)
+             discovered  (->> css-blobs
+                              (mapcat #(options-from-css % attr))
+                              distinct
+                              sort)]
+         (assoc m axis
+                (cond-> []
+                  default-opt
+                  (conj default-opt)
+
+                  true
+                  (into (remove #(= % default-opt) discovered))))))
+     {}
+     axis-specs)))
 
 (defn theme-state
   "Return the server-rendered theme state for ctx.

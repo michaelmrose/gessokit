@@ -142,3 +142,110 @@
     will-change: auto;
   }
 }
+
+/* Optimistic request action feedback.
+
+   Three phases:
+   1. Native press: CSS :active on the real button, instant and JS-independent.
+   2. JS press: gesso-live marks the form/button while the request starts.
+   3. Optimistic card: beforeRequest swaps in the optimistic server-rendered card. */
+
+[data-humanhelp-board] [data-humanhelp-request-action-form] button {
+  transition:
+    transform 80ms ease-out,
+    opacity 80ms ease-out,
+    filter 80ms ease-out,
+    box-shadow 80ms ease-out;
+  will-change: transform;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-action-form] button:active {
+  cursor: progress !important;
+  transform: translateY(2px) scale(0.965) !important;
+  box-shadow:
+    inset 0 3px 8px color-mix(in srgb, black 42%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent) !important;
+  filter: brightness(0.9) saturate(0.88) !important;
+}
+
+/* JS press phase. Current temporary implementation stores optimistic attrs on
+   the form, so style the button inside that form as well as any trigger button
+   directly marked by JS. */
+[data-humanhelp-board] form[data-gesso-optimistic-pressed="true"] button,
+[data-humanhelp-board] button[data-gesso-optimistic-trigger="true"],
+[data-humanhelp-board] [role="button"][data-gesso-optimistic-trigger="true"] {
+  cursor: progress !important;
+  opacity: 0.86 !important;
+  transform: translateY(2px) scale(0.965) !important;
+  box-shadow:
+    inset 0 3px 8px color-mix(in srgb, black 38%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--ring) 45%, transparent) !important;
+  filter: brightness(0.92) saturate(0.88) !important;
+}
+
+[data-humanhelp-board] form[data-gesso-optimistic-pressed="true"] button::after,
+[data-humanhelp-board] button[data-gesso-optimistic-trigger="true"]::after,
+[data-humanhelp-board] [role="button"][data-gesso-optimistic-trigger="true"]::after {
+  content: "";
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.5em;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  vertical-align: -0.08em;
+  animation: humanhelp-action-spin 650ms linear infinite;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-gesso-optimistic-pressed="true"] {
+  cursor: progress;
+  transform: translateY(1px);
+  outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
+  outline-offset: 2px;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-pending="true"] {
+  cursor: progress;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] {
+  border-color: color-mix(in srgb, var(--ring) 70%, var(--border) 30%) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ring) 44%, transparent),
+    0 0 22px color-mix(in srgb, var(--ring) 20%, transparent),
+    var(--shadow-sm) !important;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-summary] {
+  cursor: progress;
+}
+
+[data-humanhelp-board] [data-humanhelp-request-card][data-humanhelp-request-optimistic="true"] [data-humanhelp-request-actions] {
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+@keyframes humanhelp-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-humanhelp-board] [data-humanhelp-request-action-form] button,
+  [data-humanhelp-board] form[data-gesso-optimistic-pressed="true"] button,
+  [data-humanhelp-board] button[data-gesso-optimistic-trigger="true"],
+  [data-humanhelp-board] [role="button"][data-gesso-optimistic-trigger="true"] {
+    transition: none;
+    transform: translateY(1px) !important;
+  }
+
+  [data-humanhelp-board] form[data-gesso-optimistic-pressed="true"] button::after,
+  [data-humanhelp-board] button[data-gesso-optimistic-trigger="true"]::after,
+  [data-humanhelp-board] [role="button"][data-gesso-optimistic-trigger="true"]::after {
+    animation: none;
+    border-right-color: currentColor;
+    opacity: 0.7;
+  }
+}

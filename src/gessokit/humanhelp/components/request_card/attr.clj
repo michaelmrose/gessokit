@@ -35,6 +35,14 @@
   [request]
   (true? (:board/fading-terminal? request)))
 
+(defn pending-request?
+  [request]
+  (true? (:ui/pending? request)))
+
+(defn optimistic-request?
+  [request]
+  (true? (:ui/optimistic? request)))
+
 (defn terminal-fade-remaining-ms
   [request]
   (:board/terminal-fade-remaining-ms request))
@@ -73,7 +81,11 @@
     (when (terminal-request? request)
       "humanhelp-request-card--terminal")
     (when (fading-terminal? request)
-      "humanhelp-request-card--fading-terminal"))))
+      "humanhelp-request-card--fading-terminal")
+    (when (pending-request? request)
+      "humanhelp-request-card--pending")
+    (when (optimistic-request? request)
+      "humanhelp-request-card--optimistic"))))
 
 (defn item-attrs
   [request open?]
@@ -83,6 +95,9 @@
     :data-humanhelp-request-selected (when open? "true")
     :data-humanhelp-request-terminal (when (terminal-request? request) "true")
     :data-humanhelp-request-fading-terminal (when (fading-terminal? request) "true")
+    :data-humanhelp-request-pending (when (pending-request? request) "true")
+    :data-humanhelp-request-optimistic (when (optimistic-request? request) "true")
+    :data-humanhelp-request-pending-action (some-> (:ui/pending-action request) name)
     :data-terminal-fade-remaining-ms (terminal-fade-remaining-ms request)
     :style (card-style request)}))
 
@@ -134,6 +149,7 @@
 (defn actions-attrs
   []
   {:class "cluster-theme items-center justify-end"
+   :data-humanhelp-request-actions true
    :style {:padding-top "0.875rem"
            :background "transparent"
            :border-top "0"}})
@@ -146,5 +162,6 @@
      :hx-post to
      :hx-swap "none"
      :hx-include board-state-selector
-     :class "inline-flex"})
+     :class "inline-flex"
+     :data-humanhelp-request-action-form true})
    attrs))

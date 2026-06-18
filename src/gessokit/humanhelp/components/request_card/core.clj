@@ -7,16 +7,19 @@
 
 (defn status-label
   [request]
-  (model/request-status-label request))
+  (or (:ui/pending-label request)
+      (model/request-status-label request)))
 
 (defn status-pill-status
   [request]
-  (case (:request/status request)
-    :open :waiting
-    :claimed :active
-    :done :success
-    :cancelled :muted
-    :destructive))
+  (if (:ui/pending? request)
+    :active
+    (case (:request/status request)
+      :open :waiting
+      :claimed :active
+      :done :success
+      :cancelled :muted
+      :destructive)))
 
 (defn request-status-pill
   [request]
@@ -70,13 +73,81 @@
    (true-input routes/unclaimed-first-param unclaimed-first?)
    (true-input routes/show-terminal-param show-terminal?)])
 
+(defn- action-pending-label
+  [action]
+  (case action
+    :claim "Claiming…"
+    :take-over "Taking over…"
+    :unclaim "Unclaiming…"
+    :done "Marking done…"
+    :cancel "Canceling…"
+    "Updating…"))
+
+(defn- optimistic-template-id
+  [request action]
+  (str "humanhelp-request-"
+       (:request/id request)
+       "-"
+       (name action)
+       "-optimistic"))
+
+(defn- pending-request
+  [request action pending-label]
+  (assoc request
+         :ui/pending? true
+         :ui/optimistic? true
+         :ui/pending-action action
+         :ui/pending-label pending-label
+         :ui/disable-actions? true))
+
+(defn- optimistic-request
+  [request user action]
+  (let [pending-label (action-pending-label action)
+        user-email    (:user/email user)]
+    (case action
+      :claim
+      (assoc (pending-request request action pending-label)
+             :request/status :claimed
+             :request/claimed-by-email user-email
+             :ui/claimed-by-me? true)
+
+      :take-over
+      (assoc (pending-request request action pending-label)
+             :request/status :claimed
+             :request/claimed-by-email user-email
+             :ui/claimed-by-me? true)
+
+      :unclaim
+      (assoc (pending-request request action pending-label)
+             :request/status :open
+             :request/claimed-by-email nil)
+
+      :done
+      (pending-request request action pending-label)
+
+      :cancel
+      (pending-request request action pending-label)
+
+      (pending-request request action pending-label))))
+
 (defn form-action
-  [ctx {:keys [to text variant size view-state board-state-selector attrs]}]
+  [ctx {:keys [to
+               text
+               variant
+               size
+               view-state
+               board-state-selector
+               optimistic-template-id
+               attrs]}]
   [:form
    (attr/action-form-attrs
     {:to to
      :board-state-selector board-state-selector
-     :attrs attrs})
+     :attrs (merge
+             (when optimistic-template-id
+               {:data-gesso-optimistic-template optimistic-template-id
+                :data-gesso-optimistic-target "closest [data-humanhelp-request-card]"})
+             attrs)})
    (g/anti-forgery-input ctx)
    (view-state-hidden-inputs view-state)
    (g/button
@@ -99,7 +170,10 @@
                :unclaim :outline
                :default)
     :view-state view-state
-    :board-state-selector board-state-selector}))
+    :board-state-selector board-state-selector
+    :optimistic-template-id (optimistic-template-id request action)
+    :attrs {:data-humanhelp-request-action (name action)
+            :data-gesso-optimistic-label (action-pending-label action)}}))
 
 (defn request-meta
   [request]
@@ -121,14 +195,35 @@
      :class "text-xs-theme"
      :text (str "waiting " (model/waiting-label request))})])
 
+(defn- pending-note
+  []
+  (g/muted-text
+   {:as :p
+    :class "text-sm-theme leading-body"
+    :text "Waiting for the server to confirm this change…"}))
+
 (defn request-card-actions
   [ctx request user view-state board-state-selector]
-  (let [actions (model/available-actions request user)]
-    (when (seq actions)
-      (into
-       [:div (attr/actions-attrs)]
-       (map #(action-button ctx request % view-state board-state-selector))
-       actions))))
+  (if (:ui/disable-actions? request)
+    (pending-note)
+    (let [actions (model/available-actions request user)]
+      (when (seq actions)
+        (into
+         [:div (attr/actions-attrs)]
+         (map #(action-button ctx request % view-state board-state-selector))
+         actions)))))
+
+(defn- claimed-by-label
+  [request]
+  (cond
+    (:ui/claimed-by-me? request)
+    "you"
+
+    (:request/claimed-by-email request)
+    (:request/claimed-by-email request)
+
+    :else
+    nil))
 
 (defn request-summary
   [request open?]
@@ -146,7 +241,7 @@
        :class "weight-medium-theme"
        :text (:request/customer-name request)})
 
-     (when-let [claimed-by (:request/claimed-by-email request)]
+     (when-let [claimed-by (claimed-by-label request)]
        (g/muted-text
         {:as :span
          :class "text-xs-theme leading-body"
@@ -169,14 +264,86 @@
        :text (:request/details request)}))
    (request-card-actions ctx request user view-state board-state-selector)))
 
-(defn request-card
-  [ctx {:keys [request user view-state board-state-selector]}]
-  (let [view-state (or view-state {})
-        open?      false]
+(defn- request-item-attrs
+  [request open?]
+  (merge
+   (attr/item-attrs request open?)
+   (cond-> {}
+     (:ui/pending? request)
+     (assoc :data-humanhelp-request-pending "true")
+
+     (:ui/optimistic? request)
+     (assoc :data-humanhelp-request-optimistic "true")
+
+     (:ui/pending-action request)
+     (assoc :data-humanhelp-request-pending-action
+            (name (:ui/pending-action request))))))
+
+(defn- base-request-card
+  [ctx {:keys [request
+               user
+               view-state
+               board-state-selector
+               open?]}]
+  (let [view-state (or view-state {})]
     (g/accordion-item
      {:value (:request/id request)
       :open? open?
       :class (attr/item-class request open?)
-      :attrs (attr/item-attrs request open?)}
+      :attrs (request-item-attrs request open?)}
      (request-summary request open?)
      (request-content ctx request user view-state board-state-selector))))
+
+(defn- optimistic-template
+  [ctx {:keys [request user view-state board-state-selector action]}]
+  (let [template-id (optimistic-template-id request action)]
+    [:template {:data-gesso-optimistic-template template-id}
+     (base-request-card
+      ctx
+      {:request (optimistic-request request user action)
+       :user user
+       :view-state view-state
+       :board-state-selector board-state-selector
+       :open? true})]))
+
+(defn- optimistic-templates
+  [ctx {:keys [request user view-state board-state-selector optimistic-templates?]}]
+  (when-not (= false optimistic-templates?)
+    (let [actions (model/available-actions request user)]
+      (when (seq actions)
+        (doall
+         (for [action actions]
+           (optimistic-template
+            ctx
+            {:request request
+             :user user
+             :view-state view-state
+             :board-state-selector board-state-selector
+             :action action})))))))
+
+(defn request-card
+  [ctx {:keys [request
+               user
+               view-state
+               board-state-selector
+               open?
+               optimistic-templates?]
+        :or {open? false
+             optimistic-templates? true}}]
+  (let [card (base-request-card
+              ctx
+              {:request request
+               :user user
+               :view-state view-state
+               :board-state-selector board-state-selector
+               :open? open?})
+        templates (optimistic-templates
+                   ctx
+                   {:request request
+                    :user user
+                    :view-state view-state
+                    :board-state-selector board-state-selector
+                    :optimistic-templates? optimistic-templates?})]
+    (if (seq templates)
+      (into card templates)
+      card)))
