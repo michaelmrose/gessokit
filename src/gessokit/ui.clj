@@ -304,13 +304,13 @@
 
 (defn logout-form
   []
-  [:form {:method "post"
-          :action "/auth/signout"}
+  (biff/form
+   {:action "/auth/signout"}
    (g/button
     {:variant :ghost
      :text "Log out"
      :class "w-full justify-start"
-     :attrs {:type "submit"}})])
+     :attrs {:type "submit"}})))
 
 (defn user-menu
   [user]
