@@ -46,7 +46,11 @@
             ":target-dir" target-dir))}
 
   dev
-  (shell "clj -M:dev dev")
+  {:doc "Build themes, then start the dev server."
+   :task
+   (do
+     (shell "bb" "themes")
+     (shell "clj" "-M:dev" "dev"))}
 
   themes
   {:doc "Build theme CSS from Gessokit and Gesso component CSS."
