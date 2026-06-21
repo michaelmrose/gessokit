@@ -4,10 +4,14 @@
             [clojure.string :as str])
 
  :deps
- {michaelmrose/gesso
-  {:git/url "https://github.com/michaelmrose/gesso.git"
-   :git/tag "v0.2.0"
-   :git/sha "3f22e0c3e3cd34fca9cbb5a03625e203d5b3ad37"}}
+
+ {
+  michaelmrose/gesso {:local/root "../gesso"}
+  ;; michaelmrose/gesso
+  ;; {:git/url "https://github.com/michaelmrose/gesso.git"
+  ;;  :git/tag "v0.2.0"
+  ;;  :git/sha "3f22e0c3e3cd34fca9cbb5a03625e203d5b3ad37"}
+  }
 
  :tasks
  {to-template
