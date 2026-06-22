@@ -124,6 +124,26 @@
    (some #(str/includes? % (str text))
          (text-nodes tree))))
 
+(defn visible-hiccup-branch?
+  [x]
+  (and (hiccup-branch? x)
+       (not (and (vector? x)
+                 (= :template (first x))))))
+
+(defn visible-hiccup-seq
+  [x]
+  (tree-seq visible-hiccup-branch? seq x))
+
+(defn visible-text-nodes
+  [tree]
+  (filter string? (visible-hiccup-seq tree)))
+
+(defn contains-visible-text?
+  [tree text]
+  (boolean
+   (some #(str/includes? % (str text))
+         (visible-text-nodes tree))))
+
 (defn nodes
   [tree]
   (filter node? (hiccup-seq tree)))
@@ -494,7 +514,7 @@
     (is (= 9 (:data-latest-revision (attrs node))))
     (is (contains-text? node "Need help finding a rake"))
     (is (contains-text? node "Can someone help load soil?"))
-    (is (contains-text? node "claimed by you"))
+    (is (contains-visible-text? node "claimed by you"))
 
     (testing "request list renders a Gesso accordion but does not own selected state"
       (is (find-by-attr node :data-humanhelp-request-accordion true))
@@ -507,8 +527,8 @@
                :view-state view-state
                :requests [claimed-request]
                :latest-revision 9})]
-    (is (contains-text? node "claimed by helper@example.com"))
-    (is (not (contains-text? node "claimed by you")))))
+    (is (contains-visible-text? node "claimed by helper@example.com"))
+    (is (not (contains-visible-text? node "claimed by you")))))
 
 (deftest request-list-empty-fragment-test
   (let [node (views/request-list-fragment
