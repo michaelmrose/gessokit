@@ -71,7 +71,11 @@
              (:client-continuity opts)))
       (is (= {:enabled true
               :preserve {:scroll {:selector "[data-humanhelp-request-card]"}
-                         :focus true}}
+                         :focus true}
+              :boxes [{:type "details-open"
+                       :selector "details[data-humanhelp-request-card][data-accordion-value]"
+                       :key-attr "data-accordion-value"
+                       :single true}]}
              (:client-continuity opts))))
 
     (testing "board state remains ordinary server-relevant hx-include state"

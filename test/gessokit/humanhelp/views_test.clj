@@ -494,11 +494,21 @@
     (is (= 9 (:data-latest-revision (attrs node))))
     (is (contains-text? node "Need help finding a rake"))
     (is (contains-text? node "Can someone help load soil?"))
-    (is (contains-text? node "claimed by helper@example.com"))
+    (is (contains-text? node "claimed by you"))
 
     (testing "request list renders a Gesso accordion but does not own selected state"
       (is (find-by-attr node :data-humanhelp-request-accordion true))
       (is (nil? (hidden-input-value node "selected"))))))
+
+(deftest request-list-fragment-shows-other-claimant-email-test
+  (let [node (views/request-list-fragment
+              {:ctx ctx
+               :user owner
+               :view-state view-state
+               :requests [claimed-request]
+               :latest-revision 9})]
+    (is (contains-text? node "claimed by helper@example.com"))
+    (is (not (contains-text? node "claimed by you")))))
 
 (deftest request-list-empty-fragment-test
   (let [node (views/request-list-fragment

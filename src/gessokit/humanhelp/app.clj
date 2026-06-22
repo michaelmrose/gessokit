@@ -521,7 +521,9 @@
                     {:request-id id
                      :user user})]
     (if (= :ok (:status result))
-      (let [{:keys [request revision previous]} result]
+      (let [{:keys [request revision previous]} result
+            view-state' (assoc view-state
+                               :visible-revision revision)]
         (notify!
          ctx
          (app-live/request-transition-change
@@ -534,7 +536,7 @@
         (html
          (with-board-state-oob
            ctx
-           view-state
+           view-state'
            (views/request-lifecycle-result
             (merge
              {:user user
@@ -542,8 +544,8 @@
               :request request
               :previous previous
               :revision revision
-              :view-state view-state}
-             (board-fragments ctx view-state))))))
+              :view-state view-state'}
+             (board-fragments ctx view-state'))))))
 
       (html
        (views/request-action-error
