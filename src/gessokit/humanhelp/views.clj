@@ -13,6 +13,7 @@
   (:require
    [clojure.string :as str]
    [gesso.core :as g]
+   [gesso.live.ui :as live]
    [gessokit.client-plumbing :as client-plumbing]
    [gessokit.humanhelp.components.refresh-button.core :refer [refresh-button]]
    [gessokit.humanhelp.components.request-card.core :refer [request-card]]
@@ -531,6 +532,229 @@
           :placeholder "Search by person, request, area, or status"})})))))
 
 ;; -----------------------------------------------------------------------------
+;; Request-card presentation and action composition
+;; -----------------------------------------------------------------------------
+
+(def optimistic-request-target
+  "The request-card element replaced by Gesso's optimistic runtime."
+  "closest [data-humanhelp-request-card]")
+
+(defn humanize-token
+  [x]
+  (let [s (-> (name (or x ""))
+              (str/replace #"-" " "))]
+    (if (str/blank? s)
+      ""
+      (str (str/upper-case (subs s 0 1))
+           (subs s 1)))))
+
+(defn request-status-label
+  [request]
+  (humanize-token (:request/status request)))
+
+(defn request-status-pill-data
+  [request]
+  {:status (case (:request/status request)
+             :open :waiting
+             :claimed :active
+             :done :success
+             :cancelled :muted
+             :destructive)
+   :text (request-status-label request)
+   :dot? true})
+
+(defn request-action-label
+  [action]
+  (case action
+    :claim "Claim"
+    :unclaim "Unclaim"
+    :take-over "Take over"
+    :done "Done"
+    :cancel "Cancel"
+    (humanize-token action)))
+
+(defn request-action-pending-label
+  [action]
+  (case action
+    :claim "Claiming…"
+    :take-over "Taking over…"
+    :unclaim "Unclaiming…"
+    :done "Marking done…"
+    :cancel "Canceling…"
+    "Updating…"))
+
+(defn request-action-result-message
+  [action request]
+  (case action
+    :claim
+    (str "Claimed request #" (:request/number request) ".")
+
+    :unclaim
+    (str "Unclaimed request #" (:request/number request) ".")
+
+    :take-over
+    (str "Took over request #" (:request/number request) ".")
+
+    :done
+    (str "Marked request #" (:request/number request) " done.")
+
+    :cancel
+    (str "Cancelled request #" (:request/number request) ".")
+
+    (str "Updated request #" (:request/number request) ".")))
+
+(defn request-action-variant
+  [action]
+  (case action
+    :done :primary
+    :claim :primary
+    :take-over :primary
+    :cancel :outline
+    :unclaim :outline
+    :default))
+
+(defn request-action-button-class
+  [action]
+  (case (request-action-variant action)
+    :primary "btn-sm-primary"
+    :outline "btn-sm-outline"
+    "btn-sm"))
+
+(defn request-claimed-by-text
+  [request user]
+  (cond
+    (model/request-claimed-by-user? user request)
+    "claimed by you"
+
+    (:request/claimed-by-email request)
+    (str "claimed by " (:request/claimed-by-email request))
+
+    :else
+    nil))
+
+(defn request-pending-data
+  [request]
+  (when (:ui/pending? request)
+    {:status :muted
+     :text "Confirming…"
+     :dot? false
+     :action (:ui/pending-action request)
+     :aria-label
+     (str (or (:ui/pending-label request)
+              "Updating…")
+          " Awaiting server confirmation.")}))
+
+(defn pending-request
+  "Attach browser-pending presentation metadata to a pure model projection."
+  [request user action]
+  (assoc (model/project-request-action request action user)
+         :ui/pending? true
+         :ui/optimistic? true
+         :ui/pending-action action
+         :ui/pending-label (request-action-pending-label action)
+         :ui/disable-actions? true))
+
+(defn disabled-request-action
+  [action]
+  (g/button
+   {:variant (request-action-variant action)
+    :size :sm
+    :text (request-action-label action)
+    :attrs {:type "button"
+            :disabled true
+            :aria-disabled "true"
+            :data-humanhelp-request-action (name action)}}))
+
+(declare request-card-props)
+
+(defn request-action-control
+  [ctx {:keys [request user view-state action]}]
+  (let [pending-label      (request-action-pending-label action)
+        projected-request  (pending-request request user action)]
+    (live/post-button
+     ctx
+     {:to (routes/action-url (:request/id request) action)
+      :target optimistic-request-target
+      :swap "none"
+      :include (board-state-selector)
+      :label (request-action-label action)
+      :form-attrs
+      {:class "inline-flex"
+       :data-humanhelp-request-action-form true}
+      :button-attrs
+      {:class (request-action-button-class action)
+       :data-humanhelp-request-action (name action)}
+      :optimistic
+      {:action action
+       :pending-label pending-label
+       :content
+       (request-card
+        (request-card-props
+         ctx
+         {:request projected-request
+          :user user
+          :view-state view-state
+          :open? true
+          :interactive? false}))}})))
+
+(defn request-action-controls
+  [ctx {:keys [request user view-state interactive?]}]
+  (let [actions (model/available-actions request user)]
+    (mapv
+     (if interactive?
+       (fn [action]
+         (request-action-control
+          ctx
+          {:request request
+           :user user
+           :view-state view-state
+           :action action}))
+       disabled-request-action)
+     actions)))
+
+(defn request-card-props
+  "Prepare all application-specific presentation data and controls consumed by
+   the pure request-card component.
+
+   ctx remains a view concern because live/post-button needs the anti-forgery
+   token. It is not passed to request-card."
+  [ctx {:keys [request
+               user
+               view-state
+               open?
+               interactive?]
+        :or {open? false
+             interactive? true}}]
+  {:id (:request/id request)
+   :request-status (:request/status request)
+   :title (:request/title request)
+   :status (request-status-pill-data request)
+   :pending (request-pending-data request)
+   :optimistic? (true? (:ui/optimistic? request))
+   :fading-terminal? (true? (:board/fading-terminal? request))
+   :terminal-fade-remaining-ms
+   (:board/terminal-fade-remaining-ms request)
+   :area (:request/area request)
+   :waiting-text (str "waiting " (model/waiting-label request))
+   :customer-name (:request/customer-name request)
+   :claimed-by-text (request-claimed-by-text request user)
+   :details (when (model/present? (:request/details request))
+              (:request/details request))
+   :actions
+   (request-action-controls
+    ctx
+    {:request request
+     :user user
+     :view-state view-state
+     :interactive? interactive?})
+   :open? open?})
+
+(defn render-request-card
+  [ctx opts]
+  (request-card
+   (request-card-props ctx opts)))
+
+;; -----------------------------------------------------------------------------
 ;; Request list
 ;; -----------------------------------------------------------------------------
 
@@ -555,7 +779,7 @@
     :attrs {:data-humanhelp-request-accordion true}}
    (map
     (fn [request]
-      (request-card
+      (render-request-card
        ctx
        {:request request
         :user user
@@ -720,8 +944,8 @@
      (g/render-toast-oob
       {:variant :success
        :duration 2500
-       :title (model/action-label action)
-       :description (model/action-result-message action request)}))))
+       :title (request-action-label action)
+       :description (request-action-result-message action request)}))))
 
 (defn request-action-error
   [{:keys [result]}]

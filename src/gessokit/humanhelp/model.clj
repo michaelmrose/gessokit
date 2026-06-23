@@ -11,6 +11,7 @@
    - board option normalization/sorting/filtering
    - terminal fade/grace annotations
    - request transition rules
+   - pure request-action projection
    - seed/reset state
    - XTDB read/write helpers
    - request/event persistence
@@ -916,8 +917,60 @@
      (some? terminal-at-ms)
      (assoc :request/terminal-at-ms terminal-at-ms))))
 
+(defn request-action-patch
+  "Return the domain field changes produced by a lifecycle action.
+
+   This function contains no persistence, routing, Hiccup, Gesso Live, or
+   browser-pending state. It is the shared domain projection used by both
+   authoritative transitions and optimistic view preparation.
+
+   Options:
+     :now-ms
+       Used to set :request/terminal-at-ms for :done and :cancel. When omitted,
+       terminal projections contain the new status without inventing a clock
+       value."
+  ([action user]
+   (request-action-patch action user {}))
+  ([action user {:keys [now-ms]}]
+   (case action
+     :claim
+     (claim-fields user)
+
+     :unclaim
+     (clear-claim-fields)
+
+     :take-over
+     (claim-fields user)
+
+     :done
+     (terminal-fields :done now-ms)
+
+     :cancel
+     (terminal-fields :cancelled now-ms)
+
+     (throw
+      (ex-info "Unknown Human Help request action."
+               {:action action
+                :valid-actions lifecycle-actions})))))
+
+(defn project-request-action
+  "Return request with the domain result of action projected onto it.
+
+   This is intentionally pure and does not validate whether the action is
+   currently available. Callers preparing UI should derive actions from
+   available-actions; authoritative mutation continues to validate through
+   transition-error/transition-request.
+
+   No updated timestamp or revision is invented here. Authoritative transitions
+   add those fields after applying the same request-action-patch."
+  ([request action user]
+   (project-request-action request action user {}))
+  ([request action user opts]
+   (merge request
+          (request-action-patch action user opts))))
+
 (defn transition-request
-  "Apply a lifecycle transition to a request.
+  "Apply a validated lifecycle transition to a request.
 
    Returns:
      {:status :ok
@@ -946,27 +999,13 @@
                            (:request/updated-revision request)
                            (:request/created-revision request)
                            0)
-             patch
-             (case action
-               :claim
-               (claim-fields user)
-
-               :unclaim
-               (clear-claim-fields)
-
-               :take-over
-               (claim-fields user)
-
-               :done
-               (terminal-fields :done now-ms')
-
-               :cancel
-               (terminal-fields :cancelled now-ms'))
-
-             request' (merge request
-                             patch
-                             {:request/updated-at-ms now-ms'
-                              :request/updated-revision revision'})]
+             request'  (-> request
+                           (project-request-action
+                            action
+                            user
+                            {:now-ms now-ms'})
+                           (assoc :request/updated-at-ms now-ms'
+                                  :request/updated-revision revision'))]
          {:status :ok
           :previous request
           :request request'})))))
