@@ -11,8 +11,9 @@
       '{:deps
         {michaelmrose/gesso
          {:git/url "https://github.com/michaelmrose/gesso.git"
-          :git/tag "v0.2.0"
-          :git/sha "3f22e0c3e3cd34fca9cbb5a03625e203d5b3ad37"}}})
+          :git/tag "v0.2.1"
+          :git/sha "1e6e2fe043bde3e0368420ce4aa41ade450df959"
+}}})
 
     (def local-gesso-deps
       '{:deps
@@ -42,7 +43,7 @@
       (case mode
         :remote
         (do
-          (println "Using pinned remote Gesso v0.2.0.")
+          (println "Using pinned remote Gesso v0.2.1.")
           (deps/add-deps remote-gesso-deps))
 
         :local
