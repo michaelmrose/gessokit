@@ -125,7 +125,25 @@
           (shell "clj" "-M:dev" "dev")
 
           :local
-          (shell "clj" "-M:local-gesso:dev" "dev")))))
+          (shell "clj" "-M:local-gesso:dev" "dev"))))
+
+    (defn split-local-test-arg
+      [args]
+      (let [args (vec args)]
+        {:local? (boolean (some #{"local"} args))
+         :args (vec (remove #{"local"} args))}))
+
+    (defn run-tests!
+      [args]
+      (let [{:keys [local? args]}
+            (split-local-test-arg args)
+
+            alias
+            (if local?
+              "-M:local-gesso:test"
+              "-M:test")]
+        (apply shell
+               (into ["clj" alias] args)))))
 
   to-template
   {:doc "Regenerate the deps-new template project from this repo."
@@ -175,4 +193,9 @@
   dev
   {:doc "Build themes and start the dev server. Pass 'local' to use ../gesso."
    :task
-   (start-dev! *command-line-args*)}}}
+   (start-dev! *command-line-args*)}
+
+  test
+  {:doc "Run tests. A standalone 'local' token selects ../gesso; all other arguments are forwarded to clj -M:test."
+   :task
+   (run-tests! *command-line-args*)}}}
