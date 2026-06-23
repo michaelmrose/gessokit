@@ -15,15 +15,20 @@
         org.slf4j/log4j-over-slf4j {:mvn/version "1.7.36"}
         org.slf4j/jul-to-slf4j     {:mvn/version "1.7.36"}
         org.slf4j/jcl-over-slf4j   {:mvn/version "1.7.36"}
-        michaelmrose/gesso {:local/root "../gesso"}
-        ;; michaelmrose/gesso
-        ;; {:git/url "https://github.com/michaelmrose/gesso.git"
-        ;;  :git/tag "v0.2.0"
-        ;;  :git/sha "3f22e0c3e3cd34fca9cbb5a03625e203d5b3ad37"}
+
+        michaelmrose/gesso
+        {:git/url "https://github.com/michaelmrose/gesso.git"
+         :git/tag "v0.2.0"
+         :git/sha "3f22e0c3e3cd34fca9cbb5a03625e203d5b3ad37"}
+
         aleph/aleph {:mvn/version "0.9.8"}
         }
  :aliases
- {:dev {:extra-deps {com.biffweb/tasks {:git/url "https://github.com/jacobobryant/biff", :git/sha "0e1e207df27acb1758ec3604eb56af50b7bb47ea", :deps/root "libs/tasks"}}
+ {:local-gesso
+  {:override-deps
+   {michaelmrose/gesso {:local/root "../gesso"}}}
+
+  :dev {:extra-deps {com.biffweb/tasks {:git/url "https://github.com/jacobobryant/biff", :git/sha "0e1e207df27acb1758ec3604eb56af50b7bb47ea", :deps/root "libs/tasks"}}
         :extra-paths ["dev" "test"]
         :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                    "-Dio.netty.tryReflectionSetAccessible=true"
